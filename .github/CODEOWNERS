@@ -1,0 +1,4 @@
+# CODEOWNERS — автозапрос ревью у владельцев кода.
+# Заполнить после сбора GitHub-юзернеймов команды. Пример:
+# *                       @TimurKyr
+# /app/modules/tickets/   @backend-dev-1
