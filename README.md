@@ -16,3 +16,9 @@ See `app/` — modular monolith: `core/`, `modules/<domain>/{router,service,repo
 
 ## Conventions
 Branching, commits, and PR rules: see CONTRIBUTING.md (WIP).
+
+## Team & workflow
+
+- **Task tracking:** Jira (Scrum, 2-week sprints).
+- **Branching & PR rules:** see the shared team git-flow guide (posted in the team chat).
+- All changes land on `main` through a **Pull Request** (1 approval, squash merge, linear history).
