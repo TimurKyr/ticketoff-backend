@@ -8,7 +8,15 @@ Backend for **ticketoff** — self-service event ticketing platform (academic MV
 
 ## Getting started
 ```bash
-# TODO (Lead, week 1): uv sync && docker compose up
+cp .env.example .env
+docker compose up --build        # API on http://localhost:8000 (GET /health, /docs)
+
+# Local development
+uv sync
+docker compose up -d db          # Postgres for tests and local runs
+uv run pytest
+uv run ruff check . && uv run ruff format --check .
+uv run alembic upgrade head
 ```
 
 ## Structure
