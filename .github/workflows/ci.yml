@@ -26,7 +26,7 @@ jobs:
           --health-retries 10
 
     env:
-      DATABASE_URL: postgresql+asyncpg://ticketoff:ticketoff@localhost:5432/ticketoff
+      DATABASE_URL: postgresql+psycopg://ticketoff:ticketoff@localhost:5432/ticketoff
       JWT_SECRET: ci-secret
 
     steps:
