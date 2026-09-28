@@ -1,13 +1,13 @@
-from collections.abc import AsyncIterator
+from collections.abc import Iterator
 
 import pytest
-from httpx import ASGITransport, AsyncClient
+from fastapi.testclient import TestClient
 
 from app.main import app
 
 
 @pytest.fixture
-async def client() -> AsyncIterator[AsyncClient]:
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-        yield ac
+def client() -> Iterator[TestClient]:
+    with TestClient(app) as tc:
+        yield tc
     app.dependency_overrides.clear()

@@ -19,7 +19,7 @@ services:
     build: .
     env_file: .env
     environment:
-      DATABASE_URL: postgresql+asyncpg://ticketoff:ticketoff@db:5432/ticketoff
+      DATABASE_URL: postgresql+psycopg://ticketoff:ticketoff@db:5432/ticketoff
     ports:
       - "8000:8000"
     depends_on:
