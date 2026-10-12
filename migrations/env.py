@@ -3,11 +3,11 @@ from logging.config import fileConfig
 from alembic import context
 from sqlalchemy import engine_from_config, pool
 
+import app.modules.registry  # noqa: F401
 from app.common.base import Base
 from app.core.config import get_settings
 
-# Import every module's models here so autogenerate can see them (BE-3), e.g.:
-# import app.modules.events.models  # noqa: F401
+# `registry` imports every module's models, so autogenerate sees all tables.
 
 config = context.config
 # Escape "%" so configparser interpolation doesn't choke on URL-encoded passwords.
