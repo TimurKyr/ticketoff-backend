@@ -8,7 +8,9 @@ from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
+import app.modules.registry  # noqa: F401
 from app.core.db import engine, get_session
+from app.modules.identity.router import router as auth_router
 
 
 @asynccontextmanager
@@ -18,6 +20,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(title="ticketoff API", lifespan=lifespan)
+app.include_router(auth_router)
 
 
 @app.get("/health", tags=["health"])
