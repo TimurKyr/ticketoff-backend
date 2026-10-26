@@ -2,9 +2,11 @@ import uuid
 from datetime import datetime
 from typing import Self
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import AwareDatetime, BaseModel, Field, field_validator, model_validator
 
 from app.modules.orders.enums import TicketKind
+
+DEFAULT_MAX_PER_ORDER = 10
 
 
 def ticket_type_rule_error(
@@ -38,13 +40,17 @@ class TicketTypeCreate(BaseModel):
     kind: TicketKind = TicketKind.FREE
     price_kzt: int = Field(default=0, ge=0)
     quantity_total: int = Field(gt=0)
-    max_per_order: int | None = Field(default=10, ge=1)
-    sales_start_at: datetime | None = None
-    sales_end_at: datetime | None = None
+    # Omitted -> min(DEFAULT_MAX_PER_ORDER, quantity_total); explicit null -> no limit.
+    max_per_order: int | None = Field(default=None, ge=1)
+    # Aware only: comparing naive and aware datetimes raises TypeError.
+    sales_start_at: AwareDatetime | None = None
+    sales_end_at: AwareDatetime | None = None
     is_hidden: bool = False
 
     @model_validator(mode="after")
     def check_rules(self) -> Self:
+        if "max_per_order" not in self.model_fields_set:
+            self.max_per_order = min(DEFAULT_MAX_PER_ORDER, self.quantity_total)
         error = ticket_type_rule_error(
             kind=self.kind,
             price_kzt=self.price_kzt,
@@ -70,8 +76,8 @@ class TicketTypeUpdate(BaseModel):
     price_kzt: int | None = Field(default=None, ge=0)
     quantity_total: int | None = Field(default=None, gt=0)
     max_per_order: int | None = Field(default=None, ge=1)
-    sales_start_at: datetime | None = None
-    sales_end_at: datetime | None = None
+    sales_start_at: AwareDatetime | None = None
+    sales_end_at: AwareDatetime | None = None
     is_hidden: bool | None = None
 
     @field_validator("name", "kind", "price_kzt", "quantity_total", "is_hidden", mode="before")

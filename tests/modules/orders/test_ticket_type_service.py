@@ -66,6 +66,16 @@ def test_create_free_ticket_type_defaults(
     assert (out.kind, out.price_kzt) == (TicketKind.FREE, 0)
 
 
+def test_create_small_quantity_without_max_per_order(
+    db_session: Session, organizer: OrganizerProfile, event: Event
+) -> None:
+    data = paid_create(quantity_total=5)
+
+    out = service.create_ticket_type(db_session, organizer.id, event.id, data)
+
+    assert (out.quantity_total, out.max_per_order) == (5, 5)
+
+
 def test_create_keeps_unlimited_max_per_order(
     db_session: Session, organizer: OrganizerProfile, event: Event
 ) -> None:
