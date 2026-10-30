@@ -1,6 +1,6 @@
 import uuid
 
-from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, CheckConstraint, Column, DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
@@ -11,6 +11,26 @@ from app.modules.orders.enums import OrderStatus, TicketKind, TicketStatus
 
 class TicketType(Base):
     __tablename__ = "ticket_types"
+    # Names expand to ck_ticket_types_<name> via the naming convention.
+    __table_args__ = (
+        CheckConstraint(
+            "(kind = 'free' AND price_kzt = 0) OR (kind = 'paid' AND price_kzt > 0)",
+            name="price_matches_kind",
+        ),
+        CheckConstraint("quantity_total > 0", name="quantity_total_positive"),
+        CheckConstraint(
+            "max_per_order IS NULL OR max_per_order >= 1",
+            name="max_per_order_positive",
+        ),
+        CheckConstraint(
+            "max_per_order IS NULL OR max_per_order <= quantity_total",
+            name="max_per_order_within_total",
+        ),
+        CheckConstraint(
+            "sales_start_at IS NULL OR sales_end_at IS NULL OR sales_start_at < sales_end_at",
+            name="sales_window_valid",
+        ),
+    )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     event_id = Column(
@@ -19,12 +39,15 @@ class TicketType(Base):
         nullable=False,
         index=True,
     )
+    # TODO(seating): add section_id = ForeignKey("venue_sections.id") once VenueSection exists.
     name = Column(String, nullable=False)
     description = Column(Text)
     kind = Column(enum_column(TicketKind), nullable=False, default=TicketKind.FREE)
     price_kzt = Column(Integer, nullable=False, default=0)
     quantity_total = Column(Integer, nullable=False)
-    max_per_order = Column(Integer, default=10)
+    # NULL means no per-order limit. No ORM default: it would also replace an explicit None
+    # on insert. The default of 10 lives in TicketTypeCreate.
+    max_per_order = Column(Integer)
     sales_start_at = Column(DateTime(timezone=True))
     sales_end_at = Column(DateTime(timezone=True))
     is_hidden = Column(Boolean, nullable=False, default=False)
