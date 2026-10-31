@@ -2,9 +2,16 @@ import uuid
 from datetime import datetime
 from typing import Self
 
-from pydantic import AwareDatetime, BaseModel, Field, field_validator, model_validator
+from pydantic import (
+    AwareDatetime,
+    BaseModel,
+    EmailStr,
+    Field,
+    field_validator,
+    model_validator,
+)
 
-from app.modules.orders.enums import TicketKind
+from app.modules.orders.enums import OrderStatus, TicketKind, TicketStatus
 
 DEFAULT_MAX_PER_ORDER = 10
 
@@ -119,3 +126,65 @@ class PublicTicketTypeOut(BaseModel):
     sales_start_at: datetime | None
     sales_end_at: datetime | None
     available: int
+
+
+class RegistrationItemIn(BaseModel):
+    ticket_type_id: uuid.UUID
+    quantity: int = Field(ge=1)
+
+
+class AttendeeIn(BaseModel):
+    name: str = Field(min_length=1)
+    email: EmailStr | None = None
+
+
+class RegistrationCreate(BaseModel):
+    """Free registration. Attendees are matched to tickets in item order.
+
+    Omitted attendees -> one attendee per ticket, filled from the buyer's account.
+    """
+
+    items: list[RegistrationItemIn] = Field(min_length=1)
+    attendees: list[AttendeeIn] | None = None
+
+    @model_validator(mode="after")
+    def check_items_and_attendees(self) -> Self:
+        ids = [item.ticket_type_id for item in self.items]
+        if len(ids) != len(set(ids)):
+            raise ValueError("Each ticket_type_id may appear only once")
+        if self.attendees is not None and len(self.attendees) != self.total_quantity:
+            raise ValueError("Number of attendees must equal the total quantity")
+        return self
+
+    @property
+    def total_quantity(self) -> int:
+        return sum(item.quantity for item in self.items)
+
+
+class OrderItemOut(BaseModel):
+    ticket_type_id: uuid.UUID
+    quantity: int
+    unit_price_kzt: int
+
+
+class AttendeeOut(BaseModel):
+    name: str
+    email: str | None
+
+
+class TicketOut(BaseModel):
+    id: uuid.UUID
+    ticket_type_id: uuid.UUID
+    attendee: AttendeeOut
+    status: TicketStatus
+    # The frontend renders the QR code from this string.
+    qr_token: str
+
+
+class OrderOut(BaseModel):
+    id: uuid.UUID
+    event_id: uuid.UUID
+    status: OrderStatus
+    total_kzt: int
+    items: list[OrderItemOut]
+    tickets: list[TicketOut]

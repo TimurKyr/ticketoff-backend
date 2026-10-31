@@ -10,6 +10,8 @@ class Settings(BaseSettings):
     jwt_secret: str
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = 30
+    # Separate from jwt_secret: signs ticket QR tokens, which never expire.
+    ticket_signing_secret: str
     environment: str = "local"
 
 

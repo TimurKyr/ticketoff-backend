@@ -94,6 +94,7 @@ class Order(Base):
     buyer = relationship("User")
     event = relationship("Event")
     items = relationship("OrderItem", back_populates="order")
+    attendees = relationship("Attendee", back_populates="order")
 
 
 class OrderItem(Base):
@@ -124,6 +125,7 @@ class OrderItem(Base):
 
     order = relationship("Order", back_populates="items")
     ticket_type = relationship("TicketType")
+    tickets = relationship("Ticket", back_populates="order_item")
 
 
 class Attendee(Base):
@@ -138,6 +140,8 @@ class Attendee(Base):
     )
     name = Column(String, nullable=False)
     email = Column(String)
+
+    order = relationship("Order", back_populates="attendees")
 
 
 class Ticket(Base):
@@ -161,5 +165,5 @@ class Ticket(Base):
     status = Column(enum_column(TicketStatus), nullable=False, default=TicketStatus.VALID)
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
-    order_item = relationship("OrderItem")
+    order_item = relationship("OrderItem", back_populates="tickets")
     attendee = relationship("Attendee")
