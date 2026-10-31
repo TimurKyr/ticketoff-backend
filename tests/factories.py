@@ -52,9 +52,10 @@ def create_ticket_type(session: Session, event: Event, **overrides: object) -> T
         "kind": TicketKind.PAID,
         "price_kzt": 5000,
         "quantity_total": 100,
-        "max_per_order": 10,
-    }
-    ticket_type = TicketType(event_id=event.id, **(fields | overrides))
+    } | overrides
+    # Same default as TicketTypeCreate, so a small quantity_total stays within the CHECK.
+    fields.setdefault("max_per_order", min(10, fields["quantity_total"]))
+    ticket_type = TicketType(event_id=event.id, **fields)
     session.add(ticket_type)
     session.flush()
     return ticket_type
@@ -82,3 +83,9 @@ def create_order_item(
     session.add(item)
     session.flush()
     return item
+
+
+def create_free_ticket_type(session: Session, event: Event, **overrides: object) -> TicketType:
+    return create_ticket_type(
+        session, event, **({"kind": TicketKind.FREE, "price_kzt": 0} | overrides)
+    )

@@ -3,11 +3,11 @@ from collections.abc import Iterable
 from datetime import datetime
 
 from sqlalchemy import func, or_, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload, selectinload
 
 from app.modules.events.models import Event
 from app.modules.orders.enums import OrderStatus
-from app.modules.orders.models import Order, OrderItem, TicketType
+from app.modules.orders.models import Order, OrderItem, Ticket, TicketType
 
 
 def get_event(session: Session, event_id: uuid.UUID) -> Event | None:
@@ -62,3 +62,63 @@ def sold_quantities(
 def add(session: Session, ticket_type: TicketType) -> None:
     session.add(ticket_type)
     session.flush()
+
+
+def lock_ticket_types(session: Session, ticket_type_ids: Iterable[uuid.UUID]) -> list[TicketType]:
+    """SELECT ... FOR UPDATE on the given ticket types, held until commit or rollback.
+
+    Rows are locked in id order so concurrent orders always lock in the same order and
+    cannot deadlock. Call this before counting sold tickets. Unknown ids are skipped.
+    """
+    ids = sorted(set(ticket_type_ids))
+    if not ids:
+        return []
+    stmt = (
+        select(TicketType)
+        .where(TicketType.id.in_(ids))
+        .order_by(TicketType.id)
+        .with_for_update()
+        # Reload rows that are already in the session: other transactions may have
+        # changed them before we got the lock.
+        .execution_options(populate_existing=True)
+    )
+    return list(session.scalars(stmt))
+
+
+def add_order(session: Session, order: Order) -> None:
+    """Insert an order with everything attached to it (items, tickets, attendees)."""
+    session.add(order)
+    session.flush()
+
+
+# Items, their tickets and each ticket's attendee: everything OrderOut needs.
+_ORDER_DETAILS = (
+    selectinload(Order.items).selectinload(OrderItem.tickets).joinedload(Ticket.attendee)
+)
+
+
+def get_order_with_details(session: Session, order_id: uuid.UUID) -> Order | None:
+    return session.get(Order, order_id, options=[_ORDER_DETAILS])
+
+
+def list_orders_for_buyer(session: Session, buyer_user_id: uuid.UUID) -> list[Order]:
+    # Ordered by id until orders get a created_at column.
+    stmt = (
+        select(Order)
+        .where(Order.buyer_user_id == buyer_user_id)
+        .options(_ORDER_DETAILS)
+        .order_by(Order.id)
+    )
+    return list(session.scalars(stmt))
+
+
+def get_ticket(session: Session, ticket_id: uuid.UUID) -> Ticket | None:
+    """A ticket with its attendee and order item, plus the order (for the buyer check)."""
+    return session.get(
+        Ticket,
+        ticket_id,
+        options=(
+            joinedload(Ticket.attendee),
+            joinedload(Ticket.order_item).joinedload(OrderItem.order),
+        ),
+    )
