@@ -1,6 +1,15 @@
 import uuid
 
-from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import (
+    Boolean,
+    Column,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
@@ -17,6 +26,51 @@ class Venue(Base):
     address = Column(String)
     city = Column(String)
     timezone = Column(String, nullable=False, default="Asia/Almaty")
+
+    sections = relationship("VenueSection", back_populates="venue")
+
+
+class VenueSection(Base):
+    __tablename__ = "venue_sections"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    venue_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("venues.id"),
+        nullable=False,
+        index=True,
+    )
+    name = Column(String, nullable=False)
+    price_category = Column(String)
+
+    venue = relationship("Venue", back_populates="sections")
+    rows = relationship("Row", back_populates="section")
+
+
+class Row(Base):
+    __tablename__ = "rows"
+    # A label ("A", "12") appears once per section. The constraint's index starts with
+    # section_id, so section_id needs no separate index.
+    __table_args__ = (UniqueConstraint("section_id", "label"),)
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    section_id = Column(UUID(as_uuid=True), ForeignKey("venue_sections.id"), nullable=False)
+    label = Column(String, nullable=False)
+
+    section = relationship("VenueSection", back_populates="rows")
+    seats = relationship("Seat", back_populates="row")
+
+
+class Seat(Base):
+    __tablename__ = "seats"
+    __table_args__ = (UniqueConstraint("row_id", "number"),)
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    row_id = Column(UUID(as_uuid=True), ForeignKey("rows.id"), nullable=False)
+    number = Column(String, nullable=False)
+    is_accessible = Column(Boolean, nullable=False, default=False)
+
+    row = relationship("Row", back_populates="seats")
 
 
 class Event(Base):

@@ -39,7 +39,12 @@ class TicketType(Base):
         nullable=False,
         index=True,
     )
-    # TODO(seating): add section_id = ForeignKey("venue_sections.id") once VenueSection exists.
+    # Set for assigned-seating events: the section this price applies to.
+    section_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("venue_sections.id"),
+        index=True,
+    )
     name = Column(String, nullable=False)
     description = Column(Text)
     kind = Column(enum_column(TicketKind), nullable=False, default=TicketKind.FREE)
@@ -96,8 +101,8 @@ class OrderItem(Base):
         nullable=False,
         index=True,
     )
-    # TODO(seating): add ForeignKey("seats.id") once the Seat table exists.
-    seat_id = Column(UUID(as_uuid=True))
+    # Set only for assigned seating (one seat per item).
+    seat_id = Column(UUID(as_uuid=True), ForeignKey("seats.id"), index=True)
     quantity = Column(Integer, nullable=False)
     unit_price_kzt = Column(Integer, nullable=False)
 
@@ -135,8 +140,7 @@ class Ticket(Base):
         nullable=False,
         index=True,
     )
-    # TODO(seating): add ForeignKey("seats.id") once the Seat table exists.
-    seat_id = Column(UUID(as_uuid=True))
+    seat_id = Column(UUID(as_uuid=True), ForeignKey("seats.id"), index=True)
     qr_token = Column(String, nullable=False, unique=True)
     status = Column(enum_column(TicketStatus), nullable=False, default=TicketStatus.VALID)
 
