@@ -10,19 +10,23 @@ from app.modules.seating.enums import SeatHoldStatus
 
 
 class SeatHold(Base):
-    """Temporary reservation of one seat during checkout: held -> converted | released."""
+    """Reservation of one seat: held -> converted (sold) | released (timeout/cancel).
+
+    A refund must move converted -> released, otherwise the seat stays blocked.
+    """
 
     __tablename__ = "seat_holds"
     __table_args__ = (
-        # Only one active ('held') hold per event+seat; the database enforces it, so two
-        # buyers racing for the same seat cannot both win. Released/converted rows are
-        # history and are not covered by the index.
+        # At most one active hold per event+seat, enforced by the database. "Active" means
+        # 'held' (in checkout) or 'converted' (sold), so two buyers racing for a seat cannot
+        # both win, and a sold seat cannot be held again. Only 'released' rows are free.
+        # A refund must set the converted hold to 'released' to put the seat back on sale.
         Index(
             "uq_seat_holds_active_seat",
             "event_id",
             "seat_id",
             unique=True,
-            postgresql_where=text("status = 'held'"),
+            postgresql_where=text("status IN ('held', 'converted')"),
         ),
     )
 

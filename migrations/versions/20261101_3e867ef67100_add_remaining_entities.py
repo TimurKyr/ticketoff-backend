@@ -114,8 +114,8 @@ def upgrade() -> None:
     sa.Column('is_simulated', sa.Boolean(), nullable=False),
     sa.Column('amount_kzt', sa.Integer(), nullable=False),
     sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
-    sa.CheckConstraint("purpose <> 'activation' OR event_id IS NOT NULL", name=op.f('ck_payments_activation_has_event')),
-    sa.CheckConstraint("purpose <> 'ticket_order' OR order_id IS NOT NULL", name=op.f('ck_payments_ticket_order_has_order')),
+    sa.CheckConstraint("purpose <> 'activation' OR (event_id IS NOT NULL AND order_id IS NULL)", name=op.f('ck_payments_activation_links_event_only')),
+    sa.CheckConstraint("purpose <> 'ticket_order' OR (order_id IS NOT NULL AND event_id IS NULL)", name=op.f('ck_payments_ticket_order_links_order_only')),
     sa.CheckConstraint('amount_kzt >= 0', name=op.f('ck_payments_amount_non_negative')),
     sa.ForeignKeyConstraint(['event_id'], ['events.id'], name=op.f('fk_payments_event_id_events')),
     sa.ForeignKeyConstraint(['order_id'], ['orders.id'], name=op.f('fk_payments_order_id_orders')),
@@ -151,7 +151,7 @@ def upgrade() -> None:
     op.create_index(op.f('ix_seat_holds_event_id'), 'seat_holds', ['event_id'], unique=False)
     op.create_index(op.f('ix_seat_holds_order_id'), 'seat_holds', ['order_id'], unique=False)
     op.create_index(op.f('ix_seat_holds_seat_id'), 'seat_holds', ['seat_id'], unique=False)
-    op.create_index('uq_seat_holds_active_seat', 'seat_holds', ['event_id', 'seat_id'], unique=True, postgresql_where=sa.text("status = 'held'"))
+    op.create_index('uq_seat_holds_active_seat', 'seat_holds', ['event_id', 'seat_id'], unique=True, postgresql_where=sa.text("status IN ('held', 'converted')"))
     op.create_table('promo_redemptions',
     sa.Column('id', sa.UUID(), nullable=False),
     sa.Column('promo_code_id', sa.UUID(), nullable=False),
@@ -182,13 +182,14 @@ def upgrade() -> None:
     sa.Column('ticket_id', sa.UUID(), nullable=False),
     sa.Column('event_admin_id', sa.UUID(), nullable=False),
     sa.Column('checked_in_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
-    sa.Column('is_reversed', sa.Boolean(), nullable=False),
+    sa.Column('is_reversed', sa.Boolean(), server_default=sa.text('false'), nullable=False),
     sa.ForeignKeyConstraint(['event_admin_id'], ['users.id'], name=op.f('fk_check_in_records_event_admin_id_users')),
     sa.ForeignKeyConstraint(['ticket_id'], ['tickets.id'], name=op.f('fk_check_in_records_ticket_id_tickets')),
     sa.PrimaryKeyConstraint('id', name=op.f('pk_check_in_records'))
     )
     op.create_index(op.f('ix_check_in_records_event_admin_id'), 'check_in_records', ['event_admin_id'], unique=False)
     op.create_index(op.f('ix_check_in_records_ticket_id'), 'check_in_records', ['ticket_id'], unique=False)
+    op.create_index('uq_check_in_records_active_ticket', 'check_in_records', ['ticket_id'], unique=True, postgresql_where=sa.text('NOT is_reversed'))
     op.create_table('support_cases',
     sa.Column('id', sa.UUID(), nullable=False),
     sa.Column('opened_by', sa.UUID(), nullable=False),
@@ -252,6 +253,7 @@ def downgrade() -> None:
     op.drop_index(op.f('ix_support_cases_event_id'), table_name='support_cases')
     op.drop_index(op.f('ix_support_cases_assignee_id'), table_name='support_cases')
     op.drop_table('support_cases')
+    op.drop_index('uq_check_in_records_active_ticket', table_name='check_in_records', postgresql_where=sa.text('NOT is_reversed'))
     op.drop_index(op.f('ix_check_in_records_ticket_id'), table_name='check_in_records')
     op.drop_index(op.f('ix_check_in_records_event_admin_id'), table_name='check_in_records')
     op.drop_table('check_in_records')
@@ -259,7 +261,7 @@ def downgrade() -> None:
     op.drop_table('refunds')
     op.drop_index(op.f('ix_promo_redemptions_promo_code_id'), table_name='promo_redemptions')
     op.drop_table('promo_redemptions')
-    op.drop_index('uq_seat_holds_active_seat', table_name='seat_holds', postgresql_where=sa.text("status = 'held'"))
+    op.drop_index('uq_seat_holds_active_seat', table_name='seat_holds', postgresql_where=sa.text("status IN ('held', 'converted')"))
     op.drop_index(op.f('ix_seat_holds_seat_id'), table_name='seat_holds')
     op.drop_index(op.f('ix_seat_holds_order_id'), table_name='seat_holds')
     op.drop_index(op.f('ix_seat_holds_event_id'), table_name='seat_holds')

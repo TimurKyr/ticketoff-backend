@@ -25,13 +25,15 @@ class Payment(Base):
     __tablename__ = "payments"
     # Names expand to ck_payments_<name> via the naming convention.
     __table_args__ = (
+        # Exactly one link, matching the purpose. A ticket payment's event is reachable
+        # through its order, so it must not also carry event_id.
         CheckConstraint(
-            "purpose <> 'ticket_order' OR order_id IS NOT NULL",
-            name="ticket_order_has_order",
+            "purpose <> 'ticket_order' OR (order_id IS NOT NULL AND event_id IS NULL)",
+            name="ticket_order_links_order_only",
         ),
         CheckConstraint(
-            "purpose <> 'activation' OR event_id IS NOT NULL",
-            name="activation_has_event",
+            "purpose <> 'activation' OR (event_id IS NOT NULL AND order_id IS NULL)",
+            name="activation_links_event_only",
         ),
         CheckConstraint("amount_kzt >= 0", name="amount_non_negative"),
     )

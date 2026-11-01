@@ -1,6 +1,6 @@
 import uuid
 
-from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Text, func
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Index, Text, false, func, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import relationship
 
@@ -19,6 +19,17 @@ class CheckInRecord(Base):
     """One scan at the entrance. A mistaken scan is reversed (is_reversed), never deleted."""
 
     __tablename__ = "check_in_records"
+    __table_args__ = (
+        # At most one non-reversed check-in per ticket, enforced by the database, so two
+        # gates scanning the same QR at the same moment cannot both admit someone.
+        # Reversing a mistaken scan (is_reversed = true) allows a new check-in.
+        Index(
+            "uq_check_in_records_active_ticket",
+            "ticket_id",
+            unique=True,
+            postgresql_where=text("NOT is_reversed"),
+        ),
+    )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     ticket_id = Column(UUID(as_uuid=True), ForeignKey("tickets.id"), nullable=False, index=True)
@@ -29,7 +40,9 @@ class CheckInRecord(Base):
         index=True,
     )
     checked_in_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
-    is_reversed = Column(Boolean, nullable=False, default=False)
+    # server_default too: the unique index above depends on this column, so the DB must
+    # fill it in even for raw SQL inserts that skip it.
+    is_reversed = Column(Boolean, nullable=False, default=False, server_default=false())
 
     ticket = relationship("Ticket")
     event_admin = relationship("User")
