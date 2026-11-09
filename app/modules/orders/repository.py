@@ -59,16 +59,48 @@ def sold_quantities(
     return {ticket_type_id: int(total) for ticket_type_id, total in session.execute(stmt)}
 
 
+def held_quantity_for_event(
+    session: Session, event_id: uuid.UUID, order_statuses: Iterable[OrderStatus]
+) -> int:
+    """Sum of order_items.quantity over all ticket types of the event, for the given statuses."""
+    stmt = (
+        select(func.coalesce(func.sum(OrderItem.quantity), 0))
+        .join(Order, Order.id == OrderItem.order_id)
+        .join(TicketType, TicketType.id == OrderItem.ticket_type_id)
+        .where(TicketType.event_id == event_id, Order.status.in_(list(order_statuses)))
+    )
+    return int(session.scalar(stmt) or 0)
+
+
 def add(session: Session, ticket_type: TicketType) -> None:
     session.add(ticket_type)
     session.flush()
+
+
+# Lock order for anything that changes inventory: the event row first, then its ticket
+# types in id order. Every caller (free registration, paid checkout) must follow it, so
+# concurrent transactions never wait on each other in a cycle.
+
+
+def lock_event(session: Session, event_id: uuid.UUID) -> Event | None:
+    """SELECT ... FROM events WHERE id = :id FOR UPDATE, held until commit or rollback."""
+    stmt = (
+        select(Event)
+        .where(Event.id == event_id)
+        .with_for_update()
+        # Reload the row if it is already in the session: a concurrent cancel may have
+        # committed while we waited for the lock.
+        .execution_options(populate_existing=True)
+    )
+    return session.scalar(stmt)
 
 
 def lock_ticket_types(session: Session, ticket_type_ids: Iterable[uuid.UUID]) -> list[TicketType]:
     """SELECT ... FOR UPDATE on the given ticket types, held until commit or rollback.
 
     Rows are locked in id order so concurrent orders always lock in the same order and
-    cannot deadlock. Call this before counting sold tickets. Unknown ids are skipped.
+    cannot deadlock. Lock the event first (see above), and call this before counting
+    sold tickets. Unknown ids are skipped.
     """
     ids = sorted(set(ticket_type_ids))
     if not ids:
@@ -102,12 +134,12 @@ def get_order_with_details(session: Session, order_id: uuid.UUID) -> Order | Non
 
 
 def list_orders_for_buyer(session: Session, buyer_user_id: uuid.UUID) -> list[Order]:
-    # Ordered by id until orders get a created_at column.
+    # Newest first; id breaks ties (orders created in one transaction share now()).
     stmt = (
         select(Order)
         .where(Order.buyer_user_id == buyer_user_id)
         .options(_ORDER_DETAILS)
-        .order_by(Order.id)
+        .order_by(Order.created_at.desc(), Order.id)
     )
     return list(session.scalars(stmt))
 

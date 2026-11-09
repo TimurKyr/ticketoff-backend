@@ -9,7 +9,7 @@ from app.modules.events.enums import EventStatus, EventVisibility
 from app.modules.events.models import Event, Venue
 from app.modules.events.schemas import EventBucket, EventCreate, EventUpdate, check_dates
 from app.modules.identity.models import OrganizerProfile
-from app.modules.orders.service import INVENTORY_HOLDING_STATUSES
+from app.modules.orders.enums import INVENTORY_HOLDING_STATUSES
 
 _CLOSED = (EventStatus.CANCELLED, EventStatus.COMPLETED)
 

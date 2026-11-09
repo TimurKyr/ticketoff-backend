@@ -7,7 +7,10 @@ from sqlalchemy.orm import Session
 
 from app.core.db import get_session
 from app.main import app
+from app.modules.events.enums import EventVisibility, SeatingType
 from app.modules.events.models import Event
+from app.modules.identity.models import OrganizerProfile
+from app.modules.identity.security import create_access_token
 from app.modules.orders.models import TicketType
 from app.modules.orders.qr import verify_ticket_token
 from tests.factories import (
@@ -16,6 +19,10 @@ from tests.factories import (
     create_organizer,
     create_ticket_type,
 )
+from tests.markers import postgres_only
+
+# Every test goes through registration: FOR UPDATE locks and timezone-aware datetimes.
+pytestmark = postgres_only
 
 Headers = dict[str, str]
 
@@ -58,7 +65,11 @@ def free_type(db_session: Session, event: Event) -> TicketType:
 def register(
     api: TestClient, headers: Headers, event: Event, *items: tuple[TicketType, int], **extra: object
 ):
-    body = {"items": [{"ticket_type_id": str(tt.id), "quantity": q} for tt, q in items]} | extra
+    total = sum(q for _, q in items)
+    body = {
+        "items": [{"ticket_type_id": str(tt.id), "quantity": q} for tt, q in items],
+        "attendees": [{"name": f"Guest {n}", "email": None} for n in range(total)],
+    } | extra
     return api.post(f"/events/{event.id}/registrations", json=body, headers=headers)
 
 
@@ -98,9 +109,19 @@ def test_register_returns_201_with_signed_tickets(
     assert sorted(t["attendee"]["name"] for t in body["tickets"]) == ["Aruzhan", "Dias"]
     for ticket in body["tickets"]:
         assert ticket["status"] == "valid"
-        claims = verify_ticket_token(ticket["qr_token"])
-        assert claims is not None
-        assert str(claims.ticket_id) == ticket["id"]
+        assert str(verify_ticket_token(ticket["qr_token"])) == ticket["id"]
+
+
+def test_missing_attendees_is_422(
+    api: TestClient, login: Callable[[], Headers], event: Event, free_type: TicketType
+) -> None:
+    response = api.post(
+        f"/events/{event.id}/registrations",
+        json={"items": [{"ticket_type_id": str(free_type.id), "quantity": 1}]},
+        headers=login(),
+    )
+    assert response.status_code == 422
+    assert response.json()["detail"][0]["loc"] == ["body", "attendees"]
 
 
 @pytest.mark.parametrize(
@@ -127,7 +148,10 @@ def test_unknown_event_is_404(
 ) -> None:
     response = api.post(
         f"/events/{uuid.uuid4()}/registrations",
-        json={"items": [{"ticket_type_id": str(free_type.id), "quantity": 1}]},
+        json={
+            "items": [{"ticket_type_id": str(free_type.id), "quantity": 1}],
+            "attendees": [{"name": "Aruzhan", "email": None}],
+        },
         headers=login(),
     )
     assert response.status_code == 404
@@ -152,6 +176,28 @@ def test_sold_out_is_409(
 
     assert response.status_code == 409
     assert response.json()["detail"].startswith("Not enough tickets left")
+
+
+def test_assigned_seating_event_is_409(
+    api: TestClient, login: Callable[[], Headers], event: Event, free_type: TicketType
+) -> None:
+    event.seating_type = SeatingType.ASSIGNED
+
+    response = register(api, login(), event, (free_type, 1))
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "This event uses seat selection"
+
+
+def test_private_event_is_404(
+    api: TestClient, login: Callable[[], Headers], event: Event, free_type: TicketType
+) -> None:
+    event.visibility = EventVisibility.PRIVATE
+
+    response = register(api, login(), event, (free_type, 1))
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Event not found"
 
 
 # --- reads ---
@@ -212,3 +258,35 @@ def test_unknown_order_and_ticket_are_404(api: TestClient, login: Callable[[], H
 
 def test_malformed_id_is_422(api: TestClient, login: Callable[[], Headers]) -> None:
     assert api.get("/orders/not-a-uuid", headers=login()).status_code == 422
+
+
+# --- end to end ---
+
+
+def test_registered_ticket_checks_in_at_the_door(
+    api: TestClient,
+    login: Callable[[], Headers],
+    db_session: Session,
+    event: Event,
+    free_type: TicketType,
+) -> None:
+    """Free registration issues a tk1 token that the check-in scanner accepts once."""
+    buyer = login()
+    [ticket] = register(api, buyer, event, (free_type, 1)).json()["tickets"]
+    owner_user_id = db_session.get_one(OrganizerProfile, event.organizer_id).user_id
+    owner = {"Authorization": f"Bearer {create_access_token(owner_user_id)}"}
+
+    def scan() -> dict:
+        response = api.post(
+            "/checkin/scan",
+            json={"event_id": str(event.id), "qr_token": ticket["qr_token"]},
+            headers=owner,
+        )
+        assert response.status_code == 200, response.text
+        return response.json()
+
+    first = scan()
+    assert first["result"] == "checked_in"
+    assert first["ticket"]["id"] == ticket["id"]
+    assert scan()["result"] == "already_used"
+    assert api.get(f"/tickets/{ticket['id']}", headers=buyer).json()["status"] == "checked_in"

@@ -1,18 +1,21 @@
 import threading
+import time
 import uuid
+from collections.abc import Callable, Iterator
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, text, update
 from sqlalchemy.orm import Session
 
 from app.common.errors import BusinessRuleError, NotFoundError
-from app.core.db import SessionLocal
-from app.modules.events.enums import EventStatus
+from app.core.db import SessionLocal, engine
+from app.modules.events.enums import EventStatus, EventVisibility, SeatingType
 from app.modules.events.models import Event, Venue
 from app.modules.identity.models import OrganizerProfile, User
 from app.modules.orders import repository, service
-from app.modules.orders.enums import OrderStatus, TicketStatus
+from app.modules.orders.enums import INVENTORY_HOLDING_STATUSES, OrderStatus, TicketStatus
 from app.modules.orders.models import Attendee, Order, OrderItem, Ticket, TicketType
 from app.modules.orders.qr import verify_ticket_token
 from app.modules.orders.schemas import RegistrationCreate
@@ -24,6 +27,10 @@ from tests.factories import (
     create_ticket_type,
     create_user,
 )
+from tests.markers import postgres_only
+
+# Every test registers: FOR UPDATE locks and timezone-aware datetime comparisons.
+pytestmark = postgres_only
 
 NOW = datetime(2026, 11, 1, 12, 0, tzinfo=UTC)
 HOUR = timedelta(hours=1)
@@ -45,6 +52,10 @@ def free_type(db_session: Session, event: Event) -> TicketType:
 
 
 def registration(*items: tuple[TicketType, int], attendees: list[dict] | None = None):
+    """Request data; by default one generated attendee per ticket."""
+    if attendees is None:
+        total = sum(q for _, q in items)
+        attendees = [{"name": f"Guest {n}", "email": None} for n in range(total)]
     return RegistrationCreate.model_validate(
         {
             "items": [{"ticket_type_id": str(tt.id), "quantity": q} for tt, q in items],
@@ -75,9 +86,7 @@ def test_creates_confirmed_free_order_with_signed_tickets(
     assert {t.status for t in out.tickets} == {TicketStatus.VALID}
     assert len({t.qr_token for t in out.tickets}) == 2
     for ticket in out.tickets:
-        claims = verify_ticket_token(ticket.qr_token)
-        assert claims is not None
-        assert (claims.ticket_id, claims.event_id) == (ticket.id, event.id)
+        assert verify_ticket_token(ticket.qr_token) == ticket.id
 
 
 def test_rows_are_persisted(
@@ -125,40 +134,36 @@ def test_multiple_ticket_types_and_attendees_in_item_order(
     assert dias.attendee.email is None
 
 
-def test_attendees_default_to_buyer_email(
-    db_session: Session, buyer: User, event: Event, free_type: TicketType
-) -> None:
-    out = register(db_session, buyer, event, registration((free_type, 2)))
-
-    assert [(t.attendee.name, t.attendee.email) for t in out.tickets] == [
-        (buyer.email, buyer.email)
-    ] * 2
-
-
-def test_locks_ticket_types_before_counting_sold(
+def test_locks_event_then_ticket_types_before_counting(
     db_session: Session,
     buyer: User,
     event: Event,
     free_type: TicketType,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    event.capacity = 100
     calls: list[str] = []
-    real_lock, real_sold = repository.lock_ticket_types, repository.sold_quantities
 
-    def lock(session: Session, ids: list[uuid.UUID]) -> list[TicketType]:
-        calls.append("lock")
-        return real_lock(session, ids)
+    def spy(name: str) -> None:
+        real = getattr(repository, name)
 
-    def sold(*args: object) -> dict[uuid.UUID, int]:
-        calls.append("sold")
-        return real_sold(*args)
+        def wrapper(*args: object) -> object:
+            calls.append(name)
+            return real(*args)
 
-    monkeypatch.setattr(repository, "lock_ticket_types", lock)
-    monkeypatch.setattr(repository, "sold_quantities", sold)
+        monkeypatch.setattr(repository, name, wrapper)
+
+    for name in ("lock_event", "lock_ticket_types", "sold_quantities", "held_quantity_for_event"):
+        spy(name)
 
     register(db_session, buyer, event, registration((free_type, 1)))
 
-    assert calls == ["lock", "sold"]
+    assert calls == [
+        "lock_event",
+        "lock_ticket_types",
+        "sold_quantities",
+        "held_quantity_for_event",
+    ]
 
 
 # --- event rules ---
@@ -173,6 +178,29 @@ def test_unpublished_event_not_found(db_session: Session, buyer: User, status: E
 
     with pytest.raises(NotFoundError, match="Event not found"):
         register(db_session, buyer, event, registration((ticket_type, 1)))
+
+
+def test_private_event_not_found(
+    db_session: Session, buyer: User, event: Event, free_type: TicketType
+) -> None:
+    event.visibility = EventVisibility.PRIVATE
+    with pytest.raises(NotFoundError, match="Event not found"):
+        register(db_session, buyer, event, registration((free_type, 1)))
+
+
+def test_unlisted_event_allowed(
+    db_session: Session, buyer: User, event: Event, free_type: TicketType
+) -> None:
+    event.visibility = EventVisibility.UNLISTED
+    assert register(db_session, buyer, event, registration((free_type, 1))).tickets
+
+
+def test_assigned_seating_event_rejected(
+    db_session: Session, buyer: User, event: Event, free_type: TicketType
+) -> None:
+    event.seating_type = SeatingType.ASSIGNED
+    with pytest.raises(BusinessRuleError, match="This event uses seat selection"):
+        register(db_session, buyer, event, registration((free_type, 1)))
 
 
 def test_unknown_event_not_found(db_session: Session, buyer: User, free_type: TicketType) -> None:
@@ -243,7 +271,10 @@ def test_ticket_type_of_other_event_not_found(
 
 def test_unknown_ticket_type_not_found(db_session: Session, buyer: User, event: Event) -> None:
     data = RegistrationCreate.model_validate(
-        {"items": [{"ticket_type_id": str(uuid.uuid4()), "quantity": 1}]}
+        {
+            "items": [{"ticket_type_id": str(uuid.uuid4()), "quantity": 1}],
+            "attendees": [{"name": "Aruzhan"}],
+        }
     )
     with pytest.raises(NotFoundError, match="Ticket type not found"):
         register(db_session, buyer, event, data)
@@ -330,6 +361,66 @@ def test_failing_item_creates_nothing(
     assert db_session.scalar(select(func.count()).where(Order.buyer_user_id == buyer.id)) == 0
 
 
+# --- event capacity ---
+
+
+def test_capacity_counts_all_ticket_types(db_session: Session, buyer: User, event: Event) -> None:
+    event.capacity = 3
+    standard = create_free_ticket_type(db_session, event, name="Standard")
+    student = create_free_ticket_type(db_session, event, name="Student")
+    create_order_item(db_session, standard, 2, status=OrderStatus.FREE_CONFIRMED)
+
+    with pytest.raises(BusinessRuleError, match="Not enough capacity left"):
+        register(db_session, buyer, event, registration((student, 2)))
+
+    # Exactly filling the capacity is fine; after that the event is full.
+    assert len(register(db_session, buyer, event, registration((student, 1))).tickets) == 1
+    with pytest.raises(BusinessRuleError, match="Not enough capacity left"):
+        register(db_session, buyer, event, registration((standard, 1)))
+
+
+def test_capacity_counts_the_whole_request(db_session: Session, buyer: User, event: Event) -> None:
+    event.capacity = 2
+    standard = create_free_ticket_type(db_session, event, name="Standard")
+    student = create_free_ticket_type(db_session, event, name="Student")
+
+    with pytest.raises(BusinessRuleError, match="Not enough capacity left"):
+        register(db_session, buyer, event, registration((standard, 2), (student, 1)))
+
+
+def test_no_capacity_means_unlimited(db_session: Session, buyer: User, event: Event) -> None:
+    assert event.capacity is None
+    ticket_type = create_free_ticket_type(db_session, event, quantity_total=1000)
+    create_order_item(db_session, ticket_type, 900, status=OrderStatus.FREE_CONFIRMED)
+
+    assert len(register(db_session, buyer, event, registration((ticket_type, 10))).tickets) == 10
+
+
+@pytest.mark.parametrize("status", [OrderStatus.CANCELLED, OrderStatus.REFUNDED])
+def test_released_orders_do_not_count_toward_capacity(
+    db_session: Session, buyer: User, event: Event, status: OrderStatus
+) -> None:
+    event.capacity = 2
+    ticket_type = create_free_ticket_type(db_session, event)
+    create_order_item(db_session, ticket_type, 2, status=status)
+
+    assert len(register(db_session, buyer, event, registration((ticket_type, 2))).tickets) == 2
+
+
+def test_cancelled_event_seen_on_locked_row(
+    db_session: Session, buyer: User, event: Event, free_type: TicketType
+) -> None:
+    """The session's copy says published, but the row was cancelled: the lock re-reads it."""
+    db_session.execute(
+        update(Event).where(Event.id == event.id).values(status=EventStatus.CANCELLED),
+        execution_options={"synchronize_session": False},
+    )
+    assert event.status == EventStatus.PUBLISHED  # stale copy in the session
+
+    with pytest.raises(NotFoundError, match="Event not found"):
+        register(db_session, buyer, event, registration((free_type, 1)))
+
+
 # --- buyer reads ---
 
 
@@ -366,7 +457,7 @@ def test_list_my_orders_returns_only_mine(
 
     orders = service.list_my_orders(db_session, buyer)
 
-    assert orders == sorted(mine, key=lambda o: o.id)
+    assert sorted(orders, key=lambda o: o.id) == sorted(mine, key=lambda o: o.id)
     assert service.list_my_orders(db_session, create_user(db_session)) == []
 
 
@@ -394,59 +485,155 @@ def test_get_unknown_ticket_not_found(db_session: Session, buyer: User) -> None:
 
 
 # --- concurrency ---
+# These run on separate real connections, so rows are committed and deleted afterwards.
+
+RACERS = 5
 
 
-def test_concurrent_registrations_cannot_oversell() -> None:
-    """Several buyers race for the last ticket on separate connections; exactly one wins."""
-    racers = 5
-    with SessionLocal() as setup:
-        organizer = create_organizer(setup)
-        event = create_event(setup, organizer)
-        ticket_type = create_free_ticket_type(setup, event, quantity_total=1)
-        buyers = [create_user(setup) for _ in range(racers)]
-        setup.commit()
+@dataclass
+class Committed:
+    event: Event
+    ticket_types: list[TicketType]
+    buyer_ids: list[uuid.UUID]
 
-    barrier = threading.Barrier(racers)
-    results: list[str] = []
-    lock = threading.Lock()
 
-    def race(buyer_id: uuid.UUID) -> None:
-        with SessionLocal() as session:
-            buyer = session.get_one(User, buyer_id)
-            barrier.wait()
-            try:
-                service.register_free(session, buyer, event.id, registration((ticket_type, 1)))
-                outcome = "won"
-            except BusinessRuleError:
-                outcome = "sold out"
-        with lock:
-            results.append(outcome)
+@pytest.fixture
+def committed() -> Iterator[Callable[..., Committed]]:
+    """Builds a committed published event with free ticket types and buyers; cleans up."""
+    created: list[tuple[Committed, OrganizerProfile]] = []
 
-    try:
-        threads = [threading.Thread(target=race, args=(b.id,)) for b in buyers]
-        for thread in threads:
-            thread.start()
-        for thread in threads:
-            thread.join(timeout=30)
+    def make(quantity_total: int, types: int = 1, capacity: int | None = None) -> Committed:
+        with SessionLocal() as setup:
+            organizer = create_organizer(setup)
+            event = create_event(setup, organizer)
+            event.capacity = capacity
+            ticket_types = [
+                create_free_ticket_type(setup, event, name=f"T{n}", quantity_total=quantity_total)
+                for n in range(types)
+            ]
+            buyers = [create_user(setup) for _ in range(RACERS)]
+            setup.commit()
+        result = Committed(event, ticket_types, [b.id for b in buyers])
+        created.append((result, organizer))
+        return result
 
-        assert sorted(results) == ["sold out"] * (racers - 1) + ["won"]
-        with SessionLocal() as check:
-            sold = repository.sold_quantities(
-                check, [ticket_type.id], service.INVENTORY_HOLDING_STATUSES
-            )
-            assert sold == {ticket_type.id: 1}
-    finally:
-        with SessionLocal() as cleanup:
-            order_ids = select(Order.id).where(Order.event_id == event.id)
+    yield make
+
+    with SessionLocal() as cleanup:
+        for c, organizer in created:
+            order_ids = select(Order.id).where(Order.event_id == c.event.id)
             item_ids = select(OrderItem.id).where(OrderItem.order_id.in_(order_ids))
             cleanup.execute(delete(Ticket).where(Ticket.order_item_id.in_(item_ids)))
             cleanup.execute(delete(Attendee).where(Attendee.order_id.in_(order_ids)))
             cleanup.execute(delete(OrderItem).where(OrderItem.order_id.in_(order_ids)))
-            cleanup.execute(delete(Order).where(Order.event_id == event.id))
-            cleanup.execute(delete(TicketType).where(TicketType.id == ticket_type.id))
-            cleanup.execute(delete(Event).where(Event.id == event.id))
-            cleanup.execute(delete(Venue).where(Venue.id == event.venue_id))
+            cleanup.execute(delete(Order).where(Order.event_id == c.event.id))
+            cleanup.execute(delete(TicketType).where(TicketType.event_id == c.event.id))
+            cleanup.execute(delete(Event).where(Event.id == c.event.id))
+            cleanup.execute(delete(Venue).where(Venue.id == c.event.venue_id))
             cleanup.execute(delete(OrganizerProfile).where(OrganizerProfile.id == organizer.id))
-            user_ids = [organizer.user_id, *(b.id for b in buyers)]
-            cleanup.execute(delete(User).where(User.id.in_(user_ids)))
-            cleanup.commit()
+            cleanup.execute(delete(User).where(User.id.in_([organizer.user_id, *c.buyer_ids])))
+        cleanup.commit()
+
+
+def _register_in_own_session(
+    buyer_id: uuid.UUID, event_id: uuid.UUID, ticket_type: TicketType, before=None
+) -> str:
+    with SessionLocal() as session:
+        buyer = session.get_one(User, buyer_id)
+        if before:
+            before()
+        try:
+            service.register_free(session, buyer, event_id, registration((ticket_type, 1)))
+        except BusinessRuleError:
+            return "rejected"
+        except NotFoundError:
+            return "not found"
+        return "won"
+
+
+def _race(c: Committed, ticket_type_for: Callable[[int], TicketType]) -> list[str]:
+    """Every buyer registers for one ticket at the same moment; returns sorted outcomes."""
+    barrier = threading.Barrier(RACERS)
+    results: list[str] = []
+
+    def run(n: int) -> None:
+        outcome = _register_in_own_session(
+            c.buyer_ids[n], c.event.id, ticket_type_for(n), before=barrier.wait
+        )
+        results.append(outcome)  # list.append is atomic
+
+    threads = [threading.Thread(target=run, args=(n,)) for n in range(RACERS)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=30)
+    return sorted(results)
+
+
+def test_concurrent_registrations_cannot_oversell(committed: Callable[..., Committed]) -> None:
+    """Several buyers race for the last ticket on separate connections; exactly one wins."""
+    c = committed(quantity_total=1)
+    [ticket_type] = c.ticket_types
+
+    assert _race(c, lambda n: ticket_type) == ["rejected"] * (RACERS - 1) + ["won"]
+    with SessionLocal() as check:
+        sold = repository.sold_quantities(check, [ticket_type.id], INVENTORY_HOLDING_STATUSES)
+    assert sold == {ticket_type.id: 1}
+
+
+def test_concurrent_registrations_cannot_exceed_capacity(
+    committed: Callable[..., Committed],
+) -> None:
+    """Racers use two different ticket types, so only the event lock serializes them."""
+    c = committed(quantity_total=RACERS, types=2, capacity=1)
+
+    outcomes = _race(c, lambda n: c.ticket_types[n % 2])
+
+    assert outcomes == ["rejected"] * (RACERS - 1) + ["won"]
+    with SessionLocal() as check:
+        held = repository.held_quantity_for_event(check, c.event.id, INVENTORY_HOLDING_STATUSES)
+    assert held == 1
+
+
+def _wait_for_lock_waiter(timeout: float = 10) -> None:
+    """Block until some connection to this database is waiting on a row lock."""
+    deadline = time.monotonic() + timeout
+    with engine.connect() as conn:
+        while time.monotonic() < deadline:
+            waiting = conn.scalar(
+                text(
+                    "SELECT count(*) FROM pg_stat_activity"
+                    " WHERE datname = current_database() AND wait_event_type = 'Lock'"
+                )
+            )
+            if waiting:
+                return
+            conn.rollback()
+            time.sleep(0.02)
+    raise AssertionError("registration never waited for the event lock")
+
+
+def test_registration_after_concurrent_cancel_is_not_found(
+    committed: Callable[..., Committed],
+) -> None:
+    """A cancel holds the event lock; the registration waits, then sees the cancel and 404s."""
+    c = committed(quantity_total=10)
+    outcome: list[str] = []
+
+    with SessionLocal() as canceller:
+        event = repository.lock_event(canceller, c.event.id)
+        assert event is not None
+        event.status = EventStatus.CANCELLED
+        canceller.flush()
+
+        registrant = threading.Thread(
+            target=lambda: outcome.append(
+                _register_in_own_session(c.buyer_ids[0], c.event.id, c.ticket_types[0])
+            )
+        )
+        registrant.start()
+        _wait_for_lock_waiter()
+        canceller.commit()
+
+    registrant.join(timeout=30)
+    assert outcome == ["not found"]

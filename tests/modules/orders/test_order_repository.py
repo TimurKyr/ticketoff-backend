@@ -1,7 +1,8 @@
 import uuid
+from datetime import UTC, datetime, timedelta
 
 import pytest
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
@@ -11,7 +12,14 @@ from app.modules.identity.models import OrganizerProfile, User
 from app.modules.orders import repository
 from app.modules.orders.enums import OrderStatus
 from app.modules.orders.models import Attendee, Order, OrderItem, Ticket, TicketType
-from tests.factories import create_event, create_organizer, create_ticket_type, create_user
+from tests.factories import (
+    create_event,
+    create_order_item,
+    create_organizer,
+    create_ticket_type,
+    create_user,
+)
+from tests.markers import postgres_only
 
 
 def build_order(session: Session, buyer: User, ticket_type: TicketType, quantity: int) -> Order:
@@ -29,7 +37,26 @@ def build_order(session: Session, buyer: User, ticket_type: TicketType, quantity
     return order
 
 
-# --- lock_ticket_types ---
+# --- locks ---
+
+
+def test_lock_event_returns_row_or_none(db_session: Session) -> None:
+    event = create_event(db_session, create_organizer(db_session))
+    assert repository.lock_event(db_session, event.id) is event
+    assert repository.lock_event(db_session, uuid.uuid4()) is None
+
+
+def test_lock_event_rereads_stale_row(db_session: Session) -> None:
+    event = create_event(db_session, create_organizer(db_session))
+    db_session.execute(
+        update(Event).where(Event.id == event.id).values(title="Renamed"),
+        execution_options={"synchronize_session": False},
+    )
+    assert event.title == "Concert"
+
+    repository.lock_event(db_session, event.id)
+
+    assert event.title == "Renamed"
 
 
 def test_lock_returns_requested_types_sorted_by_id(db_session: Session) -> None:
@@ -48,7 +75,9 @@ def test_lock_skips_unknown_ids_and_handles_empty(db_session: Session) -> None:
     assert repository.lock_ticket_types(db_session, [uuid.uuid4()]) == []
 
 
-def test_lock_blocks_other_transactions() -> None:
+@postgres_only
+@pytest.mark.parametrize("model", [Event, TicketType])
+def test_lock_blocks_other_transactions(model: type[Event] | type[TicketType]) -> None:
     """While one session holds the lock, another cannot lock the same row."""
     with SessionLocal() as setup:
         organizer = create_organizer(setup)
@@ -58,18 +87,23 @@ def test_lock_blocks_other_transactions() -> None:
         setup.commit()
 
     try:
+        row_id = event.id if model is Event else ticket_type.id
+
+        def lock(session: Session) -> object:
+            if model is Event:
+                return repository.lock_event(session, event.id)
+            return repository.lock_ticket_types(session, [ticket_type.id])
+
         with SessionLocal() as holder, SessionLocal() as other:
-            assert len(repository.lock_ticket_types(holder, [ticket_type.id])) == 1
+            assert lock(holder)
             with pytest.raises(OperationalError, match="could not obtain lock"):
                 other.execute(
-                    select(TicketType.id)
-                    .where(TicketType.id == ticket_type.id)
-                    .with_for_update(nowait=True)
+                    select(model.id).where(model.id == row_id).with_for_update(nowait=True)
                 )
             other.rollback()
             holder.rollback()
             # Released: now the other session gets it.
-            assert len(repository.lock_ticket_types(other, [ticket_type.id])) == 1
+            assert lock(other)
     finally:
         with SessionLocal() as cleanup:
             for model, row_id in zip(
@@ -77,6 +111,27 @@ def test_lock_blocks_other_transactions() -> None:
             ):
                 cleanup.execute(delete(model).where(model.id == row_id))
             cleanup.commit()
+
+
+# --- held_quantity_for_event ---
+
+
+def test_held_quantity_sums_all_types_of_event_in_given_statuses(db_session: Session) -> None:
+    event = create_event(db_session, create_organizer(db_session))
+    standard = create_ticket_type(db_session, event, name="Standard")
+    student = create_ticket_type(db_session, event, name="Student")
+    create_order_item(db_session, standard, 2, status=OrderStatus.PAID)
+    create_order_item(db_session, student, 3, status=OrderStatus.FREE_CONFIRMED)
+    create_order_item(db_session, student, 4, status=OrderStatus.CANCELLED)
+    other_event = create_event(db_session, create_organizer(db_session))
+    create_order_item(db_session, create_ticket_type(db_session, other_event), 7)
+
+    held = repository.held_quantity_for_event(
+        db_session, event.id, [OrderStatus.PAID, OrderStatus.FREE_CONFIRMED]
+    )
+
+    assert held == 5
+    assert repository.held_quantity_for_event(db_session, other_event.id, []) == 0
 
 
 # --- orders ---
@@ -111,7 +166,25 @@ def test_list_orders_for_buyer_returns_only_theirs(db_session: Session) -> None:
 
     orders = repository.list_orders_for_buyer(db_session, buyer.id)
 
-    assert [o.id for o in orders] == sorted(o.id for o in mine)
+    assert {o.id for o in orders} == {o.id for o in mine}
+
+
+def test_list_orders_for_buyer_newest_first_then_id(db_session: Session) -> None:
+    ticket_type = create_ticket_type(
+        db_session, create_event(db_session, create_organizer(db_session))
+    )
+    buyer = create_user(db_session)
+    old, new, tie_a, tie_b = (build_order(db_session, buyer, ticket_type, 1) for _ in range(4))
+    base = datetime(2026, 11, 1, 12, 0, tzinfo=UTC)
+    old.created_at = base
+    new.created_at = base + timedelta(days=2)
+    tie_a.created_at = tie_b.created_at = base + timedelta(days=1)
+    db_session.flush()
+
+    orders = repository.list_orders_for_buyer(db_session, buyer.id)
+
+    middle = sorted([tie_a.id, tie_b.id])
+    assert [o.id for o in orders] == [new.id, *middle, old.id]
 
 
 def test_get_ticket_loads_order(db_session: Session) -> None:

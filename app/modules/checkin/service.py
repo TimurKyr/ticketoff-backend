@@ -22,9 +22,9 @@ from app.modules.identity.models import StaffAssignment, User
 from app.modules.ops.models import CheckInRecord
 from app.modules.orders.enums import TicketStatus
 from app.modules.orders.models import Ticket
+from app.modules.orders.qr import TICKET_PREFIX, verify_ticket_token
 
 # QR prefixes decide whose token it is (see the BE-13 / BE-16 task descriptions).
-TICKET_PREFIX = "tk1."
 CAMPAIGN_PREFIX = "pc1."
 
 _RESULT_BY_STATUS = {
@@ -149,9 +149,9 @@ def scan(session: Session, user: User, event_id: uuid.UUID, qr_token: str) -> Sc
         return _out(session, event.id, ScanResult.CAMPAIGN_QR_REJECTED)
     if not token.startswith(TICKET_PREFIX):
         return _out(session, event.id, ScanResult.INVALID)
-    # Tokens are stored (unique) when the ticket is issued, so an exact match means the
-    # token is genuine. TODO(BE-13): also check the HMAC with verify_ticket_token once
-    # the tk1 format lands, to reject forged tokens without a DB lookup.
+    # Forged or damaged tokens are rejected by the HMAC check, without a DB lookup.
+    if verify_ticket_token(token) is None:
+        return _out(session, event.id, ScanResult.INVALID)
     ticket = repository.find_ticket_for_update(session, token)
     if ticket is None:
         return _out(session, event.id, ScanResult.INVALID)

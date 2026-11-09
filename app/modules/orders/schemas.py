@@ -139,20 +139,20 @@ class AttendeeIn(BaseModel):
 
 
 class RegistrationCreate(BaseModel):
-    """Free registration. Attendees are matched to tickets in item order.
+    """Free registration: one attendee per ticket, matched to tickets in item order.
 
-    Omitted attendees -> one attendee per ticket, filled from the buyer's account.
+    Attendees are required because a User has no name to fall back on.
     """
 
     items: list[RegistrationItemIn] = Field(min_length=1)
-    attendees: list[AttendeeIn] | None = None
+    attendees: list[AttendeeIn]
 
     @model_validator(mode="after")
     def check_items_and_attendees(self) -> Self:
         ids = [item.ticket_type_id for item in self.items]
         if len(ids) != len(set(ids)):
             raise ValueError("Each ticket_type_id may appear only once")
-        if self.attendees is not None and len(self.attendees) != self.total_quantity:
+        if len(self.attendees) != self.total_quantity:
             raise ValueError("Number of attendees must equal the total quantity")
         return self
 

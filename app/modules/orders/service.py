@@ -5,15 +5,15 @@ from datetime import UTC, datetime
 from sqlalchemy.orm import Session
 
 from app.common.errors import BusinessRuleError, NotFoundError, PermissionDeniedError
-from app.modules.events.enums import EventStatus
+from app.modules.events import service as events_service
+from app.modules.events.enums import EventStatus, SeatingType
 from app.modules.events.models import Event
 from app.modules.identity.models import User
 from app.modules.orders import repository
-from app.modules.orders.enums import OrderStatus, TicketKind
+from app.modules.orders.enums import INVENTORY_HOLDING_STATUSES, OrderStatus, TicketKind
 from app.modules.orders.models import Attendee, Order, OrderItem, Ticket, TicketType
 from app.modules.orders.qr import issue_ticket_token
 from app.modules.orders.schemas import (
-    AttendeeIn,
     OrderOut,
     PublicTicketTypeOut,
     RegistrationCreate,
@@ -22,13 +22,6 @@ from app.modules.orders.schemas import (
     TicketTypeOut,
     TicketTypeUpdate,
     ticket_type_rule_error,
-)
-
-# Orders in these statuses hold inventory; cancelled and refunded ones release it.
-INVENTORY_HOLDING_STATUSES = (
-    OrderStatus.PENDING,
-    OrderStatus.PAID,
-    OrderStatus.FREE_CONFIRMED,
 )
 
 # Organizers cannot change ticket types once the event is over or called off.
@@ -241,13 +234,18 @@ def register_free(
 ) -> OrderOut:
     """Create a confirmed free order with one attendee and one signed ticket per seat.
 
-    Ticket types are locked (FOR UPDATE) before availability is counted, so concurrent
-    registrations for the last tickets are serialized and cannot oversell.
+    The event and then its ticket types are locked (FOR UPDATE) before anything is counted,
+    so concurrent registrations are serialized: they cannot oversell a ticket type or the
+    event capacity, and cannot slip in after a concurrent cancel.
     """
     now = now or datetime.now(UTC)
-    event = repository.get_event(session, event_id)
-    if event is None or event.status != EventStatus.PUBLISHED:
-        raise NotFoundError("Event not found")
+    events_service.get_public_event(session, event_id)  # 404 before taking any lock
+    repository.lock_event(session, event_id)
+    # Same check again on the locked, freshly re-read row: a cancel (or switch to private)
+    # that committed while we waited for the lock wins.
+    event = events_service.get_public_event(session, event_id)
+    if event.seating_type == SeatingType.ASSIGNED:
+        raise BusinessRuleError("This event uses seat selection")
     _ensure_registration_open(event, now)
 
     locked = {
@@ -269,17 +267,18 @@ def register_free(
     for item, ticket_type in zip(data.items, ticket_types, strict=True):
         if item.quantity > available[ticket_type.id]:
             raise BusinessRuleError(f"Not enough tickets left for {ticket_type.name}")
+    if event.capacity is not None:
+        held = repository.held_quantity_for_event(session, event.id, INVENTORY_HOLDING_STATUSES)
+        if held + data.total_quantity > event.capacity:
+            raise BusinessRuleError("Not enough capacity left")
 
-    attendees_in = data.attendees or [
-        AttendeeIn(name=user.email, email=user.email) for _ in range(data.total_quantity)
-    ]
     order = Order(
         buyer_user_id=user.id,
         event_id=event.id,
         status=OrderStatus.FREE_CONFIRMED,
         total_kzt=0,
     )
-    attendees = iter(attendees_in)
+    attendees = iter(data.attendees)
     for item_in, ticket_type in zip(data.items, ticket_types, strict=True):
         item = OrderItem(
             ticket_type_id=ticket_type.id,
@@ -296,7 +295,7 @@ def register_free(
                 Ticket(
                     id=ticket_id,
                     attendee=attendee,
-                    qr_token=issue_ticket_token(ticket_id, event.id),
+                    qr_token=issue_ticket_token(ticket_id),
                 )
             )
 
