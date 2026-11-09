@@ -1,6 +1,16 @@
 import uuid
 
-from sqlalchemy import Boolean, CheckConstraint, Column, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    Column,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    func,
+)
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
@@ -39,7 +49,12 @@ class TicketType(Base):
         nullable=False,
         index=True,
     )
-    # TODO(seating): add section_id = ForeignKey("venue_sections.id") once VenueSection exists.
+    # Set for assigned-seating events: the section this price applies to.
+    section_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("venue_sections.id"),
+        index=True,
+    )
     name = Column(String, nullable=False)
     description = Column(Text)
     kind = Column(enum_column(TicketKind), nullable=False, default=TicketKind.FREE)
@@ -74,6 +89,7 @@ class Order(Base):
     status = Column(enum_column(OrderStatus), nullable=False, default=OrderStatus.PENDING)
     total_kzt = Column(Integer, nullable=False, default=0)
     discount_kzt = Column(Integer, nullable=False, default=0)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
     buyer = relationship("User")
     event = relationship("Event")
@@ -82,6 +98,11 @@ class Order(Base):
 
 class OrderItem(Base):
     __tablename__ = "order_items"
+    # Names expand to ck_order_items_<name> via the naming convention.
+    __table_args__ = (
+        # A seated item is exactly one seat.
+        CheckConstraint("seat_id IS NULL OR quantity = 1", name="seat_item_quantity_one"),
+    )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     order_id = Column(
@@ -96,8 +117,8 @@ class OrderItem(Base):
         nullable=False,
         index=True,
     )
-    # TODO(seating): add ForeignKey("seats.id") once the Seat table exists.
-    seat_id = Column(UUID(as_uuid=True))
+    # Set only for assigned seating (one seat per item).
+    seat_id = Column(UUID(as_uuid=True), ForeignKey("seats.id"), index=True)
     quantity = Column(Integer, nullable=False)
     unit_price_kzt = Column(Integer, nullable=False)
 
@@ -135,10 +156,10 @@ class Ticket(Base):
         nullable=False,
         index=True,
     )
-    # TODO(seating): add ForeignKey("seats.id") once the Seat table exists.
-    seat_id = Column(UUID(as_uuid=True))
+    seat_id = Column(UUID(as_uuid=True), ForeignKey("seats.id"), index=True)
     qr_token = Column(String, nullable=False, unique=True)
     status = Column(enum_column(TicketStatus), nullable=False, default=TicketStatus.VALID)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
     order_item = relationship("OrderItem")
     attendee = relationship("Attendee")
