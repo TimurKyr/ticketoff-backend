@@ -27,7 +27,8 @@ jobs:
 
     env:
       DATABASE_URL: postgresql+psycopg://ticketoff:ticketoff@localhost:5432/ticketoff
-      JWT_SECRET: ci-secret
+      JWT_SECRET: ci-jwt-secret-not-for-production-0123456789
+      TICKET_SIGNING_SECRET: ci-ticket-secret-not-for-production-01234
 
     steps:
       - uses: actions/checkout@v4

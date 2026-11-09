@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 
 from app.core.db import SessionLocal, engine
 from app.modules.audit.models import AuditLog
+from app.modules.checkin import repository as checkin_repository
 from app.modules.events.enums import EventStatus
 from app.modules.events.models import Event, Venue
 from app.modules.identity.models import OrganizerProfile, StaffAssignment, User
@@ -25,6 +26,7 @@ from app.modules.identity.security import create_access_token, hash_password
 from app.modules.ops.models import CheckInRecord
 from app.modules.orders.enums import OrderStatus, TicketKind, TicketStatus
 from app.modules.orders.models import Attendee, Order, OrderItem, Ticket, TicketType
+from app.modules.orders.qr import issue_ticket_token
 
 Headers = dict[str, str]
 
@@ -106,7 +108,7 @@ def _ticket_factory(db: Session, event: Event) -> Callable[..., Ticket]:
             id=ticket_id,
             order_item_id=item.id,
             attendee_id=attendee.id,
-            qr_token=f"tk1.{ticket_id}.sig{uuid.uuid4().hex[:8]}",
+            qr_token=issue_ticket_token(ticket_id),
             status=status,
         )
         db.add(ticket)
@@ -172,6 +174,24 @@ def test_check_in_writes_a_record(client: TestClient, door: Door, db: Session) -
 )
 def test_unknown_or_foreign_tokens_are_invalid(client: TestClient, door: Door, token: str) -> None:
     assert _scan(client, door, token)["result"] == "invalid"
+
+
+def test_forged_signature_is_invalid_without_db_lookup(
+    client: TestClient, door: Door, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ticket = door.add_ticket()
+    forged = f"{ticket.qr_token.rpartition('.')[0]}.forged-signature"
+
+    def no_lookup(*args: object) -> None:
+        raise AssertionError("forged tokens must be rejected before the DB lookup")
+
+    monkeypatch.setattr(checkin_repository, "find_ticket_for_update", no_lookup)
+
+    assert _scan(client, door, forged)["result"] == "invalid"
+
+
+def test_signed_token_of_unknown_ticket_is_invalid(client: TestClient, door: Door) -> None:
+    assert _scan(client, door, issue_ticket_token(uuid.uuid4()))["result"] == "invalid"
 
 
 def test_campaign_qr_is_rejected(client: TestClient, door: Door) -> None:

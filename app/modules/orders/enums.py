@@ -14,6 +14,14 @@ class OrderStatus(enum.StrEnum):
     REFUNDED = "refunded"
 
 
+# Orders in these statuses hold inventory; cancelled and refunded ones release it.
+INVENTORY_HOLDING_STATUSES = (
+    OrderStatus.PENDING,
+    OrderStatus.PAID,
+    OrderStatus.FREE_CONFIRMED,
+)
+
+
 class TicketStatus(enum.StrEnum):
     VALID = "valid"
     CHECKED_IN = "checked_in"
