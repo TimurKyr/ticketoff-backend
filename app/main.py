@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 import app.modules.registry  # noqa: F401
 from app.core.db import engine, get_session
 from app.modules.events.router import events_router, organizer_router, venues_router
+from app.modules.identity.router import organizer_profile_router
 from app.modules.identity.router import router as auth_router
 
 
@@ -22,6 +23,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
 
 app = FastAPI(title="ticketoff API", lifespan=lifespan)
 app.include_router(auth_router)
+app.include_router(organizer_profile_router)
 app.include_router(venues_router)
 app.include_router(events_router)
 app.include_router(organizer_router)
