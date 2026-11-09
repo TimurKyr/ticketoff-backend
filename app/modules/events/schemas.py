@@ -3,7 +3,14 @@ import uuid
 from datetime import datetime
 from typing import Self
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
+from pydantic import (
+    AwareDatetime,
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_validator,
+)
 
 from app.modules.events.enums import EventStatus, EventVisibility, SeatingType
 
@@ -71,6 +78,14 @@ class EventUpdate(BaseModel):
     seating_type: SeatingType | None = None
     registration_opens_at: AwareDatetime | None = None
     registration_closes_at: AwareDatetime | None = None
+
+    @field_validator("title", "venue_id", "start_at", "visibility", "seating_type", mode="before")
+    @classmethod
+    def reject_null(cls, value: object) -> object:
+        # Only runs for values that were actually sent, so omitting the field is fine.
+        if value is None:
+            raise ValueError("may not be null")
+        return value
 
     @model_validator(mode="after")
     def validate_dates(self) -> Self:

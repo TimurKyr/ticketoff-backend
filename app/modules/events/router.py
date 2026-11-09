@@ -1,14 +1,20 @@
 import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import UTC, datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from pydantic import AwareDatetime
 from sqlalchemy.orm import Session
 
+from app.common.errors import (
+    BusinessRuleError,
+    InvalidInputError,
+    NotFoundError,
+    PermissionDeniedError,
+)
 from app.core.db import get_session
-from app.modules.events import repository, service
+from app.modules.events import service
 from app.modules.events.dependencies import require_event_owner
 from app.modules.events.models import Event
 from app.modules.events.schemas import (
@@ -37,13 +43,19 @@ organizer_router = APIRouter(prefix="/organizer/events", tags=["organizer-events
 def _http_errors() -> Iterator[None]:
     try:
         yield
-    except service.EventServiceError as exc:
-        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+    except NotFoundError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except PermissionDeniedError as exc:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    except BusinessRuleError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except InvalidInputError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
 
 
 @venues_router.get("", response_model=list[VenueOut], summary="List venues")
 def list_venues(session: SessionDep) -> list:
-    return repository.list_venues(session)
+    return service.list_venues(session)
 
 
 @events_router.post(
@@ -62,15 +74,14 @@ def list_public_events(
     session: SessionDep,
     q: str | None = None,
     category: str | None = None,
-    from_date: datetime | None = None,
-    to_date: datetime | None = None,
+    from_date: AwareDatetime | None = None,
+    to_date: AwareDatetime | None = None,
     include_past: bool = False,
     limit: Limit = 20,
     offset: Offset = 0,
 ) -> EventPage:
-    items, total = repository.list_public(
+    items, total = service.list_public_events(
         session,
-        now=datetime.now(UTC),
         q=q,
         category=category,
         from_date=from_date,
@@ -131,13 +142,8 @@ def list_my_events(
     limit: Limit = 20,
     offset: Offset = 0,
 ) -> EventPage:
-    items, total = repository.list_for_organizer(
-        session,
-        organizer_id=organizer.id,
-        bucket=bucket,
-        now=datetime.now(UTC),
-        limit=limit,
-        offset=offset,
+    items, total = service.list_organizer_events(
+        session, organizer, bucket=bucket, limit=limit, offset=offset
     )
     return EventPage(items=items, total=total, limit=limit, offset=offset)
 

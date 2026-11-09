@@ -7,6 +7,8 @@ from sqlalchemy.orm import Session
 from app.modules.events.enums import EventStatus, EventVisibility
 from app.modules.events.models import Event, Venue
 from app.modules.events.schemas import EventBucket
+from app.modules.orders.enums import OrderStatus
+from app.modules.orders.models import Order
 
 
 def list_venues(session: Session) -> list[Venue]:
@@ -19,6 +21,16 @@ def get_venue(session: Session, venue_id: uuid.UUID) -> Venue | None:
 
 def get_event(session: Session, event_id: uuid.UUID) -> Event | None:
     return session.get(Event, event_id)
+
+
+def has_orders(session: Session, event_id: uuid.UUID, statuses: list[OrderStatus]) -> bool:
+    stmt = select(Order.id).where(Order.event_id == event_id, Order.status.in_(statuses)).limit(1)
+    return session.scalar(stmt) is not None
+
+
+def _escape_like(value: str) -> str:
+    """Make % and _ in user input match literally (escape character is /)."""
+    return value.replace("/", "//").replace("%", "/%").replace("_", "/_")
 
 
 def add_event(session: Session, event: Event) -> Event:
@@ -51,7 +63,7 @@ def list_public(
         Event.visibility == EventVisibility.PUBLIC,
     )
     if q:
-        stmt = stmt.where(Event.title.ilike(f"%{q}%"))
+        stmt = stmt.where(Event.title.ilike(f"%{_escape_like(q)}%", escape="/"))
     if category:
         stmt = stmt.where(Event.category == category)
     if from_date:

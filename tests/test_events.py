@@ -17,6 +17,8 @@ from app.modules.events.enums import EventStatus
 from app.modules.events.models import Event, Venue
 from app.modules.identity.models import OrganizerProfile, User
 from app.modules.identity.security import create_access_token, hash_password
+from app.modules.orders.enums import OrderStatus
+from app.modules.orders.models import Order
 
 Headers = dict[str, str]
 UserFactory = Callable[..., tuple[User, Headers]]
@@ -389,3 +391,132 @@ def test_organizer_can_open_own_event_in_any_status(
     assert client.get(f"/organizer/events/{event['id']}", headers=org).status_code == 200
     assert client.get(f"/organizer/events/{event['id']}", headers=other_org).status_code == 404
     assert client.get("/organizer/events").status_code == 401
+
+
+# --- rules that depend on orders and on the published state (review of PR #5) ---------------
+
+
+def _add_order(db: Session, buyer: User, event_id: str, status: OrderStatus) -> None:
+    db.add(Order(buyer_user_id=buyer.id, event_id=uuid.UUID(event_id), status=status))
+    db.commit()
+
+
+@pytest.mark.parametrize(
+    "order_status", [OrderStatus.PENDING, OrderStatus.PAID, OrderStatus.FREE_CONFIRMED]
+)
+def test_cannot_unpublish_event_with_orders(
+    client: TestClient,
+    db: Session,
+    make_user: UserFactory,
+    org: Headers,
+    venue: Venue,
+    order_status: OrderStatus,
+) -> None:
+    event = _publish(client, org, _create(client, org, venue)["id"])
+    _add_order(db, make_user()[0], event["id"], order_status)
+
+    response = client.post(f"/events/{event['id']}/unpublish", headers=org)
+
+    assert response.status_code == 409
+    assert client.get(f"/events/{event['id']}").status_code == 200  # still public
+
+
+def test_cancelled_orders_do_not_block_unpublish(
+    client: TestClient, db: Session, make_user: UserFactory, org: Headers, venue: Venue
+) -> None:
+    event = _publish(client, org, _create(client, org, venue)["id"])
+    _add_order(db, make_user()[0], event["id"], OrderStatus.CANCELLED)
+
+    response = client.post(f"/events/{event['id']}/unpublish", headers=org)
+
+    assert response.status_code == 200
+
+
+def test_published_event_cannot_be_moved_into_the_past(
+    client: TestClient, org: Headers, venue: Venue
+) -> None:
+    event = _publish(client, org, _create(client, org, venue)["id"])
+
+    response = client.patch(
+        f"/events/{event['id']}", json={"start_at": _iso(-2), "end_at": _iso(-1)}, headers=org
+    )
+
+    assert response.status_code == 409
+
+
+def test_draft_event_may_still_get_past_dates(
+    client: TestClient, org: Headers, venue: Venue
+) -> None:
+    event = _create(client, org, venue)
+
+    response = client.patch(
+        f"/events/{event['id']}", json={"start_at": _iso(-2), "end_at": _iso(-1)}, headers=org
+    )
+
+    assert response.status_code == 200  # publish will refuse it later
+
+
+def test_venue_and_seating_are_locked_once_orders_exist(
+    client: TestClient,
+    db: Session,
+    make_user: UserFactory,
+    org: Headers,
+    venue: Venue,
+) -> None:
+    event = _publish(client, org, _create(client, org, venue)["id"])
+    other_venue = Venue(name=f"Hall {uuid.uuid4().hex[:6]}", city="Astana")
+    db.add(other_venue)
+    db.commit()
+    url = f"/events/{event['id']}"
+
+    assert client.patch(url, json={"venue_id": str(other_venue.id)}, headers=org).status_code == 200
+    assert client.patch(url, json={"venue_id": str(venue.id)}, headers=org).status_code == 200
+
+    _add_order(db, make_user()[0], event["id"], OrderStatus.PAID)
+
+    assert client.patch(url, json={"venue_id": str(other_venue.id)}, headers=org).status_code == 409
+    assert client.patch(url, json={"seating_type": "assigned"}, headers=org).status_code == 409
+    # Re-sending the current value or editing other fields is still fine.
+    assert client.patch(url, json={"venue_id": str(venue.id)}, headers=org).status_code == 200
+    assert client.patch(url, json={"title": "Renamed"}, headers=org).status_code == 200
+
+
+@pytest.mark.parametrize("field", ["title", "venue_id", "start_at", "visibility", "seating_type"])
+def test_required_fields_cannot_be_set_to_null(
+    client: TestClient, org: Headers, venue: Venue, field: str
+) -> None:
+    event = _create(client, org, venue)
+
+    response = client.patch(f"/events/{event['id']}", json={field: None}, headers=org)
+
+    assert response.status_code == 422
+
+
+def test_optional_fields_can_be_cleared(client: TestClient, org: Headers, venue: Venue) -> None:
+    event = _create(client, org, venue)
+
+    response = client.patch(
+        f"/events/{event['id']}", json={"description": None, "end_at": None}, headers=org
+    )
+
+    assert response.status_code == 200
+    assert response.json()["description"] is None
+    assert response.json()["end_at"] is None
+
+
+def test_search_treats_like_wildcards_literally(
+    client: TestClient, org: Headers, venue: Venue, tag: str
+) -> None:
+    _publish(client, org, _create(client, org, venue, title=f"{tag} 100% fun")["id"])
+    _publish(client, org, _create(client, org, venue, title=f"{tag} plain")["id"])
+
+    assert _titles(client, f"{tag} 100%") == [f"{tag} 100% fun"]
+    # Unescaped, "%" and "_" would act as wildcards and match both events.
+    assert _titles(client, f"{tag}%") == []
+    assert _titles(client, f"{tag}_") == []
+
+
+def test_list_filters_require_timezone(client: TestClient) -> None:
+    response = client.get("/events", params={"from_date": "2030-01-01T00:00:00"})
+
+    assert response.status_code == 422
