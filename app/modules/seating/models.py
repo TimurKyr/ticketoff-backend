@@ -1,6 +1,6 @@
 import uuid
 
-from sqlalchemy import Column, DateTime, ForeignKey, Index, func, text
+from sqlalchemy import CheckConstraint, Column, DateTime, ForeignKey, Index, func, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
@@ -13,6 +13,10 @@ class SeatHold(Base):
     """Reservation of one seat: held -> converted (sold) | released (timeout/cancel).
 
     A refund must move converted -> released, otherwise the seat stays blocked.
+
+    An index cannot use now(), so a 'held' row whose held_until has passed keeps blocking the
+    seat until it is released. The seating service must release expired holds for the seat in
+    the same transaction before inserting a new hold.
     """
 
     __tablename__ = "seat_holds"
@@ -27,6 +31,11 @@ class SeatHold(Base):
             "seat_id",
             unique=True,
             postgresql_where=text("status IN ('held', 'converted')"),
+        ),
+        # A sold seat must say which order bought it.
+        CheckConstraint(
+            "status <> 'converted' OR order_id IS NOT NULL",
+            name="converted_has_order",
         ),
     )
 

@@ -21,6 +21,10 @@ class PromotionalCampaign(Base):
             "max_redemptions IS NULL OR max_redemptions >= 1",
             name="max_redemptions_positive",
         ),
+        CheckConstraint(
+            "starts_at IS NULL OR ends_at IS NULL OR starts_at < ends_at",
+            name="window_valid",
+        ),
     )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -31,6 +35,9 @@ class PromotionalCampaign(Base):
     discount_value = Column(Integer, nullable=False)
     # NULL means unlimited.
     max_redemptions = Column(Integer)
+    # Campaign window (NULL = open-ended). PromoCodeStatus.expired means ends_at has passed.
+    starts_at = Column(DateTime(timezone=True))
+    ends_at = Column(DateTime(timezone=True))
 
     event = relationship("Event")
     codes = relationship("PromoCode", back_populates="campaign")

@@ -1,6 +1,16 @@
 import uuid
 
-from sqlalchemy import Boolean, CheckConstraint, Column, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    Column,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    func,
+)
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
@@ -79,6 +89,7 @@ class Order(Base):
     status = Column(enum_column(OrderStatus), nullable=False, default=OrderStatus.PENDING)
     total_kzt = Column(Integer, nullable=False, default=0)
     discount_kzt = Column(Integer, nullable=False, default=0)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
     buyer = relationship("User")
     event = relationship("Event")
@@ -87,6 +98,11 @@ class Order(Base):
 
 class OrderItem(Base):
     __tablename__ = "order_items"
+    # Names expand to ck_order_items_<name> via the naming convention.
+    __table_args__ = (
+        # A seated item is exactly one seat.
+        CheckConstraint("seat_id IS NULL OR quantity = 1", name="seat_item_quantity_one"),
+    )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     order_id = Column(
@@ -143,6 +159,7 @@ class Ticket(Base):
     seat_id = Column(UUID(as_uuid=True), ForeignKey("seats.id"), index=True)
     qr_token = Column(String, nullable=False, unique=True)
     status = Column(enum_column(TicketStatus), nullable=False, default=TicketStatus.VALID)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
     order_item = relationship("OrderItem")
     attendee = relationship("Attendee")

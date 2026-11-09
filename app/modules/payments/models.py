@@ -35,7 +35,7 @@ class Payment(Base):
             "purpose <> 'activation' OR (event_id IS NOT NULL AND order_id IS NULL)",
             name="activation_links_event_only",
         ),
-        CheckConstraint("amount_kzt >= 0", name="amount_non_negative"),
+        CheckConstraint("amount_kzt > 0", name="amount_positive"),
     )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -55,7 +55,7 @@ class Payment(Base):
 
 class Refund(Base):
     __tablename__ = "refunds"
-    __table_args__ = (CheckConstraint("amount_kzt >= 0", name="amount_non_negative"),)
+    __table_args__ = (CheckConstraint("amount_kzt > 0", name="amount_positive"),)
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     payment_id = Column(UUID(as_uuid=True), ForeignKey("payments.id"), nullable=False, index=True)

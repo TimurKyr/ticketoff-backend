@@ -37,8 +37,8 @@ erDiagram
     EVENT ||--o{ SUPPORT_CASE : about
     EVENT ||--o{ PAYMENT : activation
     SEAT ||--o{ SEAT_HOLD : "held by"
-    SEAT ||--o| ORDER_ITEM : "assigned to"
-    SEAT ||--o| TICKET : seats
+    SEAT ||--o{ ORDER_ITEM : "assigned to"
+    SEAT ||--o{ TICKET : seats
     TICKET_TYPE ||--o{ ORDER_ITEM : "sold as"
     ORDER ||--|{ ORDER_ITEM : contains
     ORDER ||--o{ ATTENDEE : lists
@@ -138,6 +138,7 @@ erDiagram
       enum status
       int total_kzt
       int discount_kzt
+      datetime created_at
     }
     ORDER_ITEM {
       uuid id PK
@@ -154,6 +155,7 @@ erDiagram
       uuid seat_id FK
       string qr_token
       enum status
+      datetime created_at
     }
     ATTENDEE {
       uuid id PK
@@ -211,6 +213,8 @@ erDiagram
       enum discount_type
       int discount_value
       int max_redemptions
+      datetime starts_at
+      datetime ends_at
     }
     PROMO_CODE {
       uuid id PK
@@ -273,7 +277,7 @@ erDiagram
 
 ### Promotions
 - **PromotionalCampaign** — скидочная кампания события. `discount_type`: `percent` · `fixed`.
-- **PromoCode** — промокод + токен Campaign QR. `status`: `active` · `disabled` · `exhausted` · `expired`.
+- **PromoCode** — промокод + токен Campaign QR. `status`: `active` · `disabled` · `exhausted` · `expired` (после `ends_at` кампании).
 - **PromoRedemption** — факт применения кода к заказу.
 
 ### Audit
