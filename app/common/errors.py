@@ -15,3 +15,7 @@ class PermissionDeniedError(DomainError):
 
 class BusinessRuleError(DomainError):
     """The request breaks a business rule."""
+
+
+class InvalidInputError(DomainError):
+    """The request is well-formed but refers to data that does not fit (e.g. unknown venue)."""
