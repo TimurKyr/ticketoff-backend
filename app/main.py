@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 import app.modules.registry  # noqa: F401
 from app.core.db import engine, get_session
+from app.modules.checkin.router import checkin_router, staff_router
 from app.modules.events.router import events_router, organizer_router, venues_router
 from app.modules.identity.router import organizer_profile_router
 from app.modules.identity.router import router as auth_router
@@ -27,6 +28,8 @@ app.include_router(organizer_profile_router)
 app.include_router(venues_router)
 app.include_router(events_router)
 app.include_router(organizer_router)
+app.include_router(staff_router)
+app.include_router(checkin_router)
 
 
 @app.get("/health", tags=["health"])
