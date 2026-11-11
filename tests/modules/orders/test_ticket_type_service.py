@@ -180,6 +180,20 @@ def test_availability_counts_only_inventory_holding_orders(
     assert service.get_availability(db_session, [ticket_type]) == {ticket_type.id: 93}
 
 
+def test_expired_pending_order_does_not_hold_stock(db_session: Session, event: Event) -> None:
+    now = datetime.now(UTC)
+    ticket_type = create_ticket_type(db_session, event, quantity_total=100)
+    # Hold is 15 minutes (default CHECKOUT_HOLD_MINUTES).
+    create_order_item(
+        db_session, ticket_type, 1, OrderStatus.PENDING, created_at=now - timedelta(minutes=14)
+    )
+    create_order_item(
+        db_session, ticket_type, 10, OrderStatus.PENDING, created_at=now - timedelta(minutes=16)
+    )
+
+    assert service.get_availability(db_session, [ticket_type], now) == {ticket_type.id: 99}
+
+
 def test_availability_is_never_negative(db_session: Session, event: Event) -> None:
     ticket_type = create_ticket_type(db_session, event, quantity_total=5, max_per_order=5)
     create_order_item(db_session, ticket_type, 7)

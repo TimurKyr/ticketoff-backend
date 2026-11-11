@@ -15,7 +15,7 @@ from app.modules.events.enums import EventStatus, EventVisibility, SeatingType
 from app.modules.events.models import Event, Venue
 from app.modules.identity.models import OrganizerProfile, User
 from app.modules.orders import repository, service
-from app.modules.orders.enums import INVENTORY_HOLDING_STATUSES, OrderStatus, TicketStatus
+from app.modules.orders.enums import OrderStatus, TicketStatus
 from app.modules.orders.models import Attendee, Order, OrderItem, Ticket, TicketType
 from app.modules.orders.qr import verify_ticket_token
 from app.modules.orders.schemas import RegistrationCreate
@@ -134,6 +134,22 @@ def test_multiple_ticket_types_and_attendees_in_item_order(
     assert dias.attendee.email is None
 
 
+def test_attendees_are_linked_to_their_order_item(
+    db_session: Session, buyer: User, event: Event, free_type: TicketType
+) -> None:
+    other_type = create_free_ticket_type(db_session, event, name="Student")
+
+    out = register(db_session, buyer, event, registration((free_type, 1), (other_type, 2)))
+
+    db_session.expire_all()
+    tickets = db_session.scalars(
+        select(Ticket).where(Ticket.id.in_([t.id for t in out.tickets]))
+    ).all()
+    assert len(tickets) == 3
+    # The stored link (needed to issue paid tickets later) matches the ticket's item.
+    assert all(t.attendee.order_item_id == t.order_item_id for t in tickets)
+
+
 def test_locks_event_then_ticket_types_before_counting(
     db_session: Session,
     buyer: User,
@@ -147,9 +163,9 @@ def test_locks_event_then_ticket_types_before_counting(
     def spy(name: str) -> None:
         real = getattr(repository, name)
 
-        def wrapper(*args: object) -> object:
+        def wrapper(*args: object, **kwargs: object) -> object:
             calls.append(name)
-            return real(*args)
+            return real(*args, **kwargs)
 
         monkeypatch.setattr(repository, name, wrapper)
 
@@ -577,7 +593,7 @@ def test_concurrent_registrations_cannot_oversell(committed: Callable[..., Commi
 
     assert _race(c, lambda n: ticket_type) == ["rejected"] * (RACERS - 1) + ["won"]
     with SessionLocal() as check:
-        sold = repository.sold_quantities(check, [ticket_type.id], INVENTORY_HOLDING_STATUSES)
+        sold = repository.sold_quantities(check, [ticket_type.id], datetime.now(UTC))
     assert sold == {ticket_type.id: 1}
 
 
@@ -591,7 +607,7 @@ def test_concurrent_registrations_cannot_exceed_capacity(
 
     assert outcomes == ["rejected"] * (RACERS - 1) + ["won"]
     with SessionLocal() as check:
-        held = repository.held_quantity_for_event(check, c.event.id, INVENTORY_HOLDING_STATUSES)
+        held = repository.held_quantity_for_event(check, c.event.id, datetime.now(UTC))
     assert held == 1
 
 
