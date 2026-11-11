@@ -1,7 +1,10 @@
-"""Paid sales activation (BE-14). Everything is simulated: no real KYC, payouts or money.
+"""Simulated payments (BE-14). Everything is simulated: no real KYC, payouts or money.
 
-An organizer completes a per-event checklist. Whichever step finishes it, in any order,
-sets Event.paid_sales_active. Every step is idempotent, so repeating one is harmless.
+Activation: an organizer completes a per-event checklist. Whichever step finishes it, in
+any order, sets Event.paid_sales_active. Every step is idempotent.
+
+Pay: a buyer pays a pending checkout order with a simulated card result. Success issues the
+tickets; failure leaves the order pending so the buyer can retry until it expires.
 """
 
 import uuid
@@ -11,15 +14,26 @@ from sqlalchemy.orm import Session
 
 from app.common.errors import BusinessRuleError, NotFoundError
 from app.core.config import get_settings
+from app.modules.events.enums import EventStatus
 from app.modules.events.models import Event
 from app.modules.identity.enums import PayoutAccountStatus, VerificationStatus
-from app.modules.identity.models import PayoutAccount
+from app.modules.identity.models import PayoutAccount, User
+from app.modules.ops.enums import NotificationChannel, NotificationType
+from app.modules.ops.models import Notification
 from app.modules.orders import repository as orders_repository
+from app.modules.orders import service as orders_service
+from app.modules.orders.enums import OrderStatus
+from app.modules.orders.models import Order
 from app.modules.orders.service import CLOSED_EVENT_STATUSES
 from app.modules.payments import repository
 from app.modules.payments.enums import PaymentPurpose, PaymentStatus
 from app.modules.payments.models import Payment
-from app.modules.payments.schemas import ActivationChecklistOut
+from app.modules.payments.schemas import (
+    ActivationChecklistOut,
+    PaymentOut,
+    PaymentResultOut,
+    PayOrderIn,
+)
 
 
 def _checklist(session: Session, event: Event) -> ActivationChecklistOut:
@@ -117,3 +131,78 @@ def pay_activation(session: Session, event: Event) -> ActivationChecklistOut:
             ),
         )
     return _finish_step(session, event)
+
+
+# --- paying a checkout order ---
+
+
+def _result(session: Session, order: Order, payment: Payment) -> PaymentResultOut:
+    # Reload the order with items and tickets from the DB: the response must show the
+    # tickets just issued (or by a concurrent pay), never a stale in-session collection.
+    order = orders_repository.get_order_with_details(session, order.id, reload=True)
+    return PaymentResultOut(
+        payment=PaymentOut.model_validate(payment, from_attributes=True),
+        order=orders_service.order_out(order),
+    )
+
+
+def pay_order(
+    session: Session,
+    user: User,
+    order_id: uuid.UUID,
+    data: PayOrderIn,
+    now: datetime | None = None,
+) -> PaymentResultOut:
+    """Pay a pending checkout order with a simulated card result.
+
+    The order row is locked (FOR UPDATE) first, so two pays of the same order run one
+    after the other: the second sees status = paid and returns the same result. The time is
+    compared once, under that lock. Only the order is locked, so this cannot deadlock with
+    checkout or registration (event -> ticket types).
+    """
+    now = now or datetime.now(UTC)
+    order = orders_repository.lock_order(session, order_id)
+    if order is None or order.buyer_user_id != user.id:
+        raise NotFoundError("Order not found")
+
+    if order.status == OrderStatus.PAID:
+        # Already paid (a retry, or a concurrent pay that won): create nothing.
+        return _result(session, order, repository.get_succeeded_order_payment(session, order.id))
+    if order.status != OrderStatus.PENDING:
+        raise BusinessRuleError("Order cannot be paid")
+    if now >= order.created_at + orders_repository.checkout_hold():
+        order.status = OrderStatus.CANCELLED
+        session.commit()  # keep the cancellation, then report it
+        raise BusinessRuleError("Checkout expired, start again")
+    # Checked again at pay time: an admin may suspend paid sales (BE-22) after checkout.
+    event = order.event
+    if event.status != EventStatus.PUBLISHED or not event.paid_sales_active:
+        raise BusinessRuleError("Paid ticket sales are not active for this event")
+
+    # From the stored order, never from the client.
+    amount = order.total_kzt - order.discount_kzt
+    succeeded = data.simulate == "success"
+    payment = Payment(
+        purpose=PaymentPurpose.TICKET_ORDER,
+        order_id=order.id,
+        amount_kzt=amount,
+        status=PaymentStatus.SUCCEEDED if succeeded else PaymentStatus.FAILED,
+        is_simulated=True,
+    )
+    repository.add_payment(session, payment)
+
+    if succeeded:
+        order.status = OrderStatus.PAID
+        orders_service.issue_tickets(order)
+        repository.add_notification(
+            session,
+            Notification(
+                user_id=order.buyer_user_id,
+                type=NotificationType.ORDER_CONFIRMED,
+                channel=NotificationChannel.IN_APP,
+                payload={"order_id": str(order.id)},
+            ),
+        )
+    # A failed payment changes nothing else: the order stays pending and keeps its hold.
+    session.commit()  # one commit: payment, status, tickets and notification together
+    return _result(session, order, payment)

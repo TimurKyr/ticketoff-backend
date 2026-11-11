@@ -1,6 +1,10 @@
+import uuid
 from typing import Literal
 
 from pydantic import BaseModel
+
+from app.modules.orders.schemas import OrderOut
+from app.modules.payments.enums import PaymentStatus
 
 
 class ActivationChecklistOut(BaseModel):
@@ -19,3 +23,24 @@ class ActivationChecklistOut(BaseModel):
     active: bool
     activation_fee_kzt: int
     is_simulated: Literal[True] = True
+
+
+class PayOrderIn(BaseModel):
+    """Simulated card result: there is no real payment provider."""
+
+    simulate: Literal["success", "fail"]
+
+
+class PaymentOut(BaseModel):
+    id: uuid.UUID
+    status: PaymentStatus
+    amount_kzt: int
+    is_simulated: bool
+
+
+class PaymentResultOut(BaseModel):
+    """Result of a pay attempt. A failed simulated payment is still a 200: the request
+    worked, the simulated card did not. The order then stays pending, without tickets."""
+
+    payment: PaymentOut
+    order: OrderOut
