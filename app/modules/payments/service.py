@@ -32,6 +32,7 @@ from app.modules.payments.schemas import (
     ActivationChecklistOut,
     PaymentOut,
     PaymentResultOut,
+    PaymentSummaryOut,
     PayOrderIn,
 )
 
@@ -206,3 +207,24 @@ def pay_order(
     # A failed payment changes nothing else: the order stays pending and keeps its hold.
     session.commit()  # one commit: payment, status, tickets and notification together
     return _result(session, order, payment)
+
+
+# --- organizer summary ---
+
+
+def _percent_half_up(amount: int, percent: int) -> int:
+    """amount * percent / 100 rounded half up, in integer KZT (no floats)."""
+    return (amount * percent + 50) // 100
+
+
+def get_summary(session: Session, event: Event) -> PaymentSummaryOut:
+    gross, refunds = repository.summary_totals(session, event.id)
+    percent = get_settings().processing_fee_percent
+    fees = _percent_half_up(gross, percent)
+    return PaymentSummaryOut(
+        gross_kzt=gross,
+        fees_kzt=fees,
+        refunds_kzt=refunds,
+        estimated_payout_kzt=gross - fees - refunds,
+        fee_percent=percent,
+    )

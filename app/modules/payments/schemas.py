@@ -44,3 +44,15 @@ class PaymentResultOut(BaseModel):
 
     payment: PaymentOut
     order: OrderOut
+
+
+class PaymentSummaryOut(BaseModel):
+    """Organizer view of an event's simulated ticket revenue, in whole KZT."""
+
+    gross_kzt: int
+    fees_kzt: int
+    refunds_kzt: int
+    estimated_payout_kzt: int
+    fee_percent: int
+    currency: Literal["KZT"] = "KZT"
+    is_simulated: Literal[True] = True

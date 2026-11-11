@@ -10,7 +10,12 @@ from app.modules.events.dependencies import require_event_owner
 from app.modules.events.models import Event
 from app.modules.identity.dependencies import CurrentUser, SessionDep
 from app.modules.payments import service
-from app.modules.payments.schemas import ActivationChecklistOut, PaymentResultOut, PayOrderIn
+from app.modules.payments.schemas import (
+    ActivationChecklistOut,
+    PaymentResultOut,
+    PaymentSummaryOut,
+    PayOrderIn,
+)
 
 # Owner only: someone else's event answers 404 (require_event_owner).
 OwnedEventDep = Annotated[Event, Depends(require_event_owner)]
@@ -73,3 +78,12 @@ def pay_order(
     """200 for both results: on "fail" the payment is failed and the order stays pending."""
     with _http_errors():
         return service.pay_order(session, user, order_id, payload)
+
+
+@payments_router.get(
+    "/events/{event_id}/payments/summary",
+    response_model=PaymentSummaryOut,
+    summary="Simulated revenue summary for the organizer",
+)
+def get_summary(event: OwnedEventDep, session: SessionDep) -> PaymentSummaryOut:
+    return service.get_summary(session, event)
