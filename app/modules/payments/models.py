@@ -6,9 +6,11 @@ from sqlalchemy import (
     Column,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     String,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
@@ -36,6 +38,20 @@ class Payment(Base):
             name="activation_links_event_only",
         ),
         CheckConstraint("amount_kzt > 0", name="amount_positive"),
+        # At most one succeeded payment per order and per event activation, so a double
+        # pay is refused by the DB even if the row lock in the service were bypassed.
+        Index(
+            "uq_payments_order_succeeded",
+            "order_id",
+            unique=True,
+            postgresql_where=text("status = 'succeeded' AND purpose = 'ticket_order'"),
+        ),
+        Index(
+            "uq_payments_activation_succeeded",
+            "event_id",
+            unique=True,
+            postgresql_where=text("status = 'succeeded' AND purpose = 'activation'"),
+        ),
     )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)

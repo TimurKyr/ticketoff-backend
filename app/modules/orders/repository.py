@@ -1,10 +1,11 @@
 import uuid
 from collections.abc import Iterable
-from datetime import datetime
+from datetime import datetime, timedelta
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import ColumnElement, and_, func, or_, select
 from sqlalchemy.orm import Session, joinedload, selectinload
 
+from app.core.config import get_settings
 from app.modules.events.models import Event
 from app.modules.orders.enums import OrderStatus
 from app.modules.orders.models import Order, OrderItem, Ticket, TicketType
@@ -38,12 +39,28 @@ def list_by_event(
     return list(session.scalars(stmt))
 
 
+def checkout_hold() -> timedelta:
+    """How long a pending (unpaid) order holds its tickets."""
+    return timedelta(minutes=get_settings().checkout_hold_minutes)
+
+
+def holding_orders_clause(now: datetime, hold: timedelta) -> ColumnElement[bool]:
+    """Orders that hold inventory at `now`.
+
+    Paid and free-confirmed orders always do. A pending order does only while it is younger
+    than `hold`: an abandoned checkout releases its tickets on its own, without a cleanup
+    job. Cancelled and refunded orders never do.
+    """
+    return or_(
+        Order.status.in_([OrderStatus.PAID, OrderStatus.FREE_CONFIRMED]),
+        and_(Order.status == OrderStatus.PENDING, Order.created_at > now - hold),
+    )
+
+
 def sold_quantities(
-    session: Session,
-    ticket_type_ids: Iterable[uuid.UUID],
-    order_statuses: Iterable[OrderStatus],
+    session: Session, ticket_type_ids: Iterable[uuid.UUID], now: datetime
 ) -> dict[uuid.UUID, int]:
-    """Sum of order_items.quantity per ticket type, for orders in the given statuses.
+    """Sum of order_items.quantity per ticket type, over orders that hold inventory at `now`.
 
     Ticket types with no matching items are absent from the result.
     """
@@ -53,21 +70,20 @@ def sold_quantities(
     stmt = (
         select(OrderItem.ticket_type_id, func.sum(OrderItem.quantity))
         .join(Order, Order.id == OrderItem.order_id)
-        .where(OrderItem.ticket_type_id.in_(ids), Order.status.in_(list(order_statuses)))
+        .where(OrderItem.ticket_type_id.in_(ids), holding_orders_clause(now, checkout_hold()))
         .group_by(OrderItem.ticket_type_id)
     )
     return {ticket_type_id: int(total) for ticket_type_id, total in session.execute(stmt)}
 
 
-def held_quantity_for_event(
-    session: Session, event_id: uuid.UUID, order_statuses: Iterable[OrderStatus]
-) -> int:
-    """Sum of order_items.quantity over all ticket types of the event, for the given statuses."""
+def held_quantity_for_event(session: Session, event_id: uuid.UUID, now: datetime) -> int:
+    """Sum of order_items.quantity over all ticket types of the event, over orders that hold
+    inventory at `now`."""
     stmt = (
         select(func.coalesce(func.sum(OrderItem.quantity), 0))
         .join(Order, Order.id == OrderItem.order_id)
         .join(TicketType, TicketType.id == OrderItem.ticket_type_id)
-        .where(TicketType.event_id == event_id, Order.status.in_(list(order_statuses)))
+        .where(TicketType.event_id == event_id, holding_orders_clause(now, checkout_hold()))
     )
     return int(session.scalar(stmt) or 0)
 
@@ -129,8 +145,29 @@ _ORDER_DETAILS = (
 )
 
 
-def get_order_with_details(session: Session, order_id: uuid.UUID) -> Order | None:
-    return session.get(Order, order_id, options=[_ORDER_DETAILS])
+def get_order_with_details(
+    session: Session, order_id: uuid.UUID, *, reload: bool = False
+) -> Order | None:
+    """With reload, query the database even if the order is already in the session and
+    overwrite what is loaded (items and tickets included)."""
+    return session.get(Order, order_id, options=[_ORDER_DETAILS], populate_existing=reload)
+
+
+def lock_order(session: Session, order_id: uuid.UUID) -> Order | None:
+    """SELECT ... FROM orders WHERE id = :id FOR UPDATE, held until commit or rollback.
+
+    Serializes payments of one order. Pay takes only this lock (never the event or ticket
+    type locks), so it cannot form a cycle with checkout or registration.
+    """
+    stmt = (
+        select(Order)
+        .where(Order.id == order_id)
+        .with_for_update()
+        # Reload if already in the session: a concurrent pay may have committed while we
+        # waited for the lock.
+        .execution_options(populate_existing=True)
+    )
+    return session.scalar(stmt)
 
 
 def list_orders_for_buyer(session: Session, buyer_user_id: uuid.UUID) -> list[Order]:

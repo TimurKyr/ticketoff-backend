@@ -116,22 +116,23 @@ def test_lock_blocks_other_transactions(model: type[Event] | type[TicketType]) -
 # --- held_quantity_for_event ---
 
 
-def test_held_quantity_sums_all_types_of_event_in_given_statuses(db_session: Session) -> None:
+def test_held_quantity_sums_all_types_of_event_over_holding_orders(db_session: Session) -> None:
+    now = datetime.now(UTC)
     event = create_event(db_session, create_organizer(db_session))
     standard = create_ticket_type(db_session, event, name="Standard")
     student = create_ticket_type(db_session, event, name="Student")
     create_order_item(db_session, standard, 2, status=OrderStatus.PAID)
     create_order_item(db_session, student, 3, status=OrderStatus.FREE_CONFIRMED)
     create_order_item(db_session, student, 4, status=OrderStatus.CANCELLED)
+    create_order_item(
+        db_session, student, 8, status=OrderStatus.PENDING, created_at=now - timedelta(minutes=16)
+    )
     other_event = create_event(db_session, create_organizer(db_session))
     create_order_item(db_session, create_ticket_type(db_session, other_event), 7)
+    empty_event = create_event(db_session, create_organizer(db_session))
 
-    held = repository.held_quantity_for_event(
-        db_session, event.id, [OrderStatus.PAID, OrderStatus.FREE_CONFIRMED]
-    )
-
-    assert held == 5
-    assert repository.held_quantity_for_event(db_session, other_event.id, []) == 0
+    assert repository.held_quantity_for_event(db_session, event.id, now) == 5
+    assert repository.held_quantity_for_event(db_session, empty_event.id, now) == 0
 
 
 # --- orders ---

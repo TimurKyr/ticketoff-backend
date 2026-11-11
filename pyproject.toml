@@ -38,3 +38,6 @@ select = ["E", "F", "I", "UP", "B", "ASYNC"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "slow: real concurrent sessions; deselect with -m \"not slow\"",
+]

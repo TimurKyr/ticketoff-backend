@@ -396,8 +396,17 @@ def test_organizer_can_open_own_event_in_any_status(
 # --- rules that depend on orders and on the published state (review of PR #5) ---------------
 
 
-def _add_order(db: Session, buyer: User, event_id: str, status: OrderStatus) -> None:
-    db.add(Order(buyer_user_id=buyer.id, event_id=uuid.UUID(event_id), status=status))
+def _add_order(
+    db: Session,
+    buyer: User,
+    event_id: str,
+    status: OrderStatus,
+    created_at: datetime | None = None,
+) -> None:
+    order = Order(buyer_user_id=buyer.id, event_id=uuid.UUID(event_id), status=status)
+    if created_at is not None:
+        order.created_at = created_at
+    db.add(order)
     db.commit()
 
 
@@ -430,6 +439,23 @@ def test_cancelled_orders_do_not_block_unpublish(
     response = client.post(f"/events/{event['id']}/unpublish", headers=org)
 
     assert response.status_code == 200
+
+
+def test_expired_pending_order_does_not_block_update_or_unpublish(
+    client: TestClient, db: Session, make_user: UserFactory, org: Headers, venue: Venue
+) -> None:
+    """An abandoned checkout (older than the 15-minute hold) holds nothing, so it must not
+    lock the venue or keep the event published."""
+    event = _publish(client, org, _create(client, org, venue)["id"])
+    other_venue = Venue(name=f"Hall {uuid.uuid4().hex[:6]}", city="Astana")
+    db.add(other_venue)
+    db.commit()
+    expired = datetime.now(UTC) - timedelta(minutes=16)
+    _add_order(db, make_user()[0], event["id"], OrderStatus.PENDING, created_at=expired)
+
+    url = f"/events/{event['id']}"
+    assert client.patch(url, json={"venue_id": str(other_venue.id)}, headers=org).status_code == 200
+    assert client.post(f"{url}/unpublish", headers=org).status_code == 200
 
 
 def test_published_event_cannot_be_moved_into_the_past(
