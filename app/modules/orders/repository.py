@@ -145,8 +145,29 @@ _ORDER_DETAILS = (
 )
 
 
-def get_order_with_details(session: Session, order_id: uuid.UUID) -> Order | None:
-    return session.get(Order, order_id, options=[_ORDER_DETAILS])
+def get_order_with_details(
+    session: Session, order_id: uuid.UUID, *, reload: bool = False
+) -> Order | None:
+    """With reload, query the database even if the order is already in the session and
+    overwrite what is loaded (items and tickets included)."""
+    return session.get(Order, order_id, options=[_ORDER_DETAILS], populate_existing=reload)
+
+
+def lock_order(session: Session, order_id: uuid.UUID) -> Order | None:
+    """SELECT ... FROM orders WHERE id = :id FOR UPDATE, held until commit or rollback.
+
+    Serializes payments of one order. Pay takes only this lock (never the event or ticket
+    type locks), so it cannot form a cycle with checkout or registration.
+    """
+    stmt = (
+        select(Order)
+        .where(Order.id == order_id)
+        .with_for_update()
+        # Reload if already in the session: a concurrent pay may have committed while we
+        # waited for the lock.
+        .execution_options(populate_existing=True)
+    )
+    return session.scalar(stmt)
 
 
 def list_orders_for_buyer(session: Session, buyer_user_id: uuid.UUID) -> list[Order]:

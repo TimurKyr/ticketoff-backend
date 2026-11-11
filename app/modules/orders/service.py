@@ -274,7 +274,7 @@ def issue_tickets(order: Order) -> None:
     """One signed ticket per attendee, attached to the attendee's order item.
 
     Goes through relationships, not raw ids: on a new order nothing is flushed yet, and
-    _order_out reads the tickets from item.tickets.
+    order_out reads the tickets from item.tickets.
     """
     for attendee in order.attendees:
         # The id is set here, not on flush, because it goes into the signed token.
@@ -296,7 +296,7 @@ def _ticket_out(ticket: Ticket, ticket_type_id: uuid.UUID) -> TicketOut:
     )
 
 
-def _order_out(order: Order) -> OrderOut:
+def order_out(order: Order) -> OrderOut:
     # Sorted by id so a freshly created order and a reloaded one list rows the same way.
     items = sorted(order.items, key=lambda item: item.id)
     tickets = sorted(
@@ -384,7 +384,7 @@ def register_free(
 
     repository.add_order(session, order)
     session.commit()  # also releases the ticket type locks
-    return _order_out(order)
+    return order_out(order)
 
 
 def checkout(
@@ -408,7 +408,7 @@ def checkout(
     # created_at is the DB's now(); load it so expires_at can be computed.
     session.refresh(order, ["created_at"])
     session.commit()  # also releases the ticket type locks
-    return _order_out(order)
+    return order_out(order)
 
 
 # --- buyer reads ---
@@ -416,14 +416,14 @@ def checkout(
 
 
 def list_my_orders(session: Session, user: User) -> list[OrderOut]:
-    return [_order_out(order) for order in repository.list_orders_for_buyer(session, user.id)]
+    return [order_out(order) for order in repository.list_orders_for_buyer(session, user.id)]
 
 
 def get_my_order(session: Session, user: User, order_id: uuid.UUID) -> OrderOut:
     order = repository.get_order_with_details(session, order_id)
     if order is None or order.buyer_user_id != user.id:
         raise NotFoundError("Order not found")
-    return _order_out(order)
+    return order_out(order)
 
 
 def get_my_ticket(session: Session, user: User, ticket_id: uuid.UUID) -> TicketOut:

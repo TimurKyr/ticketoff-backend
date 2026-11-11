@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.modules.identity.enums import PayoutAccountStatus
 from app.modules.identity.models import OrganizerProfile, PayoutAccount
+from app.modules.ops.models import Notification
 from app.modules.orders.enums import TicketKind
 from app.modules.orders.models import TicketType
 from app.modules.payments.enums import PaymentPurpose, PaymentStatus
@@ -67,6 +68,21 @@ def get_succeeded_activation(session: Session, event_id: uuid.UUID) -> Payment |
     return session.scalar(stmt)
 
 
+def get_succeeded_order_payment(session: Session, order_id: uuid.UUID) -> Payment | None:
+    """The order's succeeded payment; uq_payments_order_succeeded allows one."""
+    stmt = select(Payment).where(
+        Payment.order_id == order_id,
+        Payment.purpose == PaymentPurpose.TICKET_ORDER,
+        Payment.status == PaymentStatus.SUCCEEDED,
+    )
+    return session.scalar(stmt)
+
+
 def add_payment(session: Session, payment: Payment) -> None:
     session.add(payment)
+    session.flush()
+
+
+def add_notification(session: Session, notification: Notification) -> None:
+    session.add(notification)
     session.flush()

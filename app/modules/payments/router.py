@@ -1,3 +1,4 @@
+import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import Annotated
@@ -7,14 +8,15 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from app.common.errors import BusinessRuleError, NotFoundError
 from app.modules.events.dependencies import require_event_owner
 from app.modules.events.models import Event
-from app.modules.identity.dependencies import SessionDep
+from app.modules.identity.dependencies import CurrentUser, SessionDep
 from app.modules.payments import service
-from app.modules.payments.schemas import ActivationChecklistOut
+from app.modules.payments.schemas import ActivationChecklistOut, PaymentResultOut, PayOrderIn
 
 # Owner only: someone else's event answers 404 (require_event_owner).
 OwnedEventDep = Annotated[Event, Depends(require_event_owner)]
 
 activation_router = APIRouter(prefix="/events/{event_id}/activation", tags=["activation"])
+payments_router = APIRouter(tags=["payments"])
 
 
 @contextmanager
@@ -58,3 +60,16 @@ def accept_terms(event: OwnedEventDep, session: SessionDep) -> ActivationCheckli
 def pay_activation(event: OwnedEventDep, session: SessionDep) -> ActivationChecklistOut:
     with _http_errors():
         return service.pay_activation(session, event)
+
+
+@payments_router.post(
+    "/orders/{order_id}/pay",
+    response_model=PaymentResultOut,
+    summary="Pay a pending order (simulated card: success or fail)",
+)
+def pay_order(
+    order_id: uuid.UUID, payload: PayOrderIn, user: CurrentUser, session: SessionDep
+) -> PaymentResultOut:
+    """200 for both results: on "fail" the payment is failed and the order stays pending."""
+    with _http_errors():
+        return service.pay_order(session, user, order_id, payload)
