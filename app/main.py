@@ -20,6 +20,7 @@ from app.modules.orders.router import (
     ticket_types_router,
     tickets_router,
 )
+from app.modules.payments.router import activation_router
 
 
 @asynccontextmanager
@@ -40,6 +41,7 @@ app.include_router(ticket_types_router)
 app.include_router(registrations_router)
 app.include_router(orders_router)
 app.include_router(tickets_router)
+app.include_router(activation_router)
 
 
 @app.get("/health", tags=["health"])
