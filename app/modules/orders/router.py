@@ -7,7 +7,7 @@ from fastapi import APIRouter, HTTPException, status
 from app.common.errors import BusinessRuleError, NotFoundError, PermissionDeniedError
 from app.modules.identity.dependencies import CurrentUser, SessionDep
 from app.modules.orders import service
-from app.modules.orders.schemas import OrderOut, RegistrationCreate, TicketOut
+from app.modules.orders.schemas import CheckoutCreate, OrderOut, RegistrationCreate, TicketOut
 
 registrations_router = APIRouter(prefix="/events", tags=["registrations"])
 orders_router = APIRouter(prefix="/orders", tags=["orders"])
@@ -37,6 +37,19 @@ def register_free(
 ) -> OrderOut:
     with _http_errors():
         return service.register_free(session, user, event_id, payload)
+
+
+@registrations_router.post(
+    "/{event_id}/checkout",
+    response_model=OrderOut,
+    status_code=status.HTTP_201_CREATED,
+    summary="Start a checkout for paid tickets (simulated payment follows)",
+)
+def checkout(
+    event_id: uuid.UUID, payload: CheckoutCreate, user: CurrentUser, session: SessionDep
+) -> OrderOut:
+    with _http_errors():
+        return service.checkout(session, user, event_id, payload)
 
 
 # Declared before /{order_id} so "me" is not parsed as an order id.

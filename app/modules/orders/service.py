@@ -14,6 +14,7 @@ from app.modules.orders.enums import OrderStatus, TicketKind
 from app.modules.orders.models import Attendee, Order, OrderItem, Ticket, TicketType
 from app.modules.orders.qr import issue_ticket_token
 from app.modules.orders.schemas import (
+    CheckoutCreate,
     OrderOut,
     PublicTicketTypeOut,
     RegistrationCreate,
@@ -317,29 +318,34 @@ def _order_out(order: Order) -> OrderOut:
                 for item in items
             ],
             "tickets": [_ticket_out(ticket, item.ticket_type_id) for item, ticket in tickets],
+            "expires_at": _expires_at(order),
         }
     )
 
 
-def register_free(
-    session: Session,
+def _expires_at(order: Order) -> datetime | None:
+    """When a pending order stops holding its tickets; None for every other status."""
+    if order.status != OrderStatus.PENDING:
+        return None
+    return order.created_at + repository.checkout_hold()
+
+
+def _build_order(
     user: User,
-    event_id: uuid.UUID,
+    event: Event,
     data: RegistrationCreate,
-    now: datetime | None = None,
-) -> OrderOut:
-    """Create a confirmed free order with one attendee and one signed ticket per seat.
+    ticket_types: Sequence[TicketType],
+    status: OrderStatus,
+) -> Order:
+    """A new order with its items and one attendee per ticket, linked to the attendee's item.
 
-    Locking and every check are in _lock_and_validate.
+    Prices come from the locked ticket types, never from the request.
     """
-    now = now or datetime.now(UTC)
-    event, ticket_types = _lock_and_validate(session, event_id, data.items, now, TicketKind.FREE)
     total, discount = _compute_total(data.items, ticket_types)
-
     order = Order(
         buyer_user_id=user.id,
         event_id=event.id,
-        status=OrderStatus.FREE_CONFIRMED,
+        status=status,
         total_kzt=total,
         discount_kzt=discount,
     )
@@ -357,9 +363,50 @@ def register_free(
             order.attendees.append(
                 Attendee(order_item=item, name=attendee_in.name, email=attendee_in.email)
             )
+    return order
+
+
+def register_free(
+    session: Session,
+    user: User,
+    event_id: uuid.UUID,
+    data: RegistrationCreate,
+    now: datetime | None = None,
+) -> OrderOut:
+    """Create a confirmed free order with one attendee and one signed ticket per seat.
+
+    Locking and every check are in _lock_and_validate.
+    """
+    now = now or datetime.now(UTC)
+    event, ticket_types = _lock_and_validate(session, event_id, data.items, now, TicketKind.FREE)
+    order = _build_order(user, event, data, ticket_types, OrderStatus.FREE_CONFIRMED)
     issue_tickets(order)
 
     repository.add_order(session, order)
+    session.commit()  # also releases the ticket type locks
+    return _order_out(order)
+
+
+def checkout(
+    session: Session,
+    user: User,
+    event_id: uuid.UUID,
+    data: CheckoutCreate,
+    now: datetime | None = None,
+) -> OrderOut:
+    """Create a pending order for paid tickets and hold the inventory for the checkout hold.
+
+    No tickets yet: they are issued only when the (simulated) payment succeeds. Until then
+    the order counts against stock; once it is older than the hold it stops counting.
+    Locking and every check (including paid_sales_active) are in _lock_and_validate.
+    """
+    now = now or datetime.now(UTC)
+    event, ticket_types = _lock_and_validate(session, event_id, data.items, now, TicketKind.PAID)
+    order = _build_order(user, event, data, ticket_types, OrderStatus.PENDING)
+
+    repository.add_order(session, order)
+    # created_at is the DB's now(); load it so expires_at can be computed.
+    session.refresh(order, ["created_at"])
     session.commit()  # also releases the ticket type locks
     return _order_out(order)
 
