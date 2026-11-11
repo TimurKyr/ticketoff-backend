@@ -15,6 +15,7 @@ from app.modules.events.router import events_router, organizer_router, venues_ro
 from app.modules.identity.router import organizer_profile_router
 from app.modules.identity.router import router as auth_router
 from app.modules.orders.router import orders_router, registrations_router, tickets_router
+from app.modules.payments.router import activation_router
 
 
 @asynccontextmanager
@@ -34,6 +35,7 @@ app.include_router(checkin_router)
 app.include_router(registrations_router)
 app.include_router(orders_router)
 app.include_router(tickets_router)
+app.include_router(activation_router)
 
 
 @app.get("/health", tags=["health"])
