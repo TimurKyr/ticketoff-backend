@@ -104,6 +104,8 @@ class Event(Base):
         default=SeatingType.GENERAL,
     )
     paid_sales_active = Column(Boolean, nullable=False, default=False)
+    # When the organizer accepted the paid-sales terms (activation checklist). NULL = not yet.
+    paid_terms_accepted_at = Column(DateTime(timezone=True))
     capacity = Column(Integer)
     start_at = Column(DateTime(timezone=True), nullable=False)
     end_at = Column(DateTime(timezone=True))
