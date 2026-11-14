@@ -48,6 +48,34 @@ def _get_owned_event(
     return event
 
 
+def _lock_owned_event(
+    session: Session, event_id: uuid.UUID, organizer_profile_id: uuid.UUID
+) -> Event:
+    """The organizer's event, locked FOR UPDATE until commit.
+
+    Ownership is checked before the lock is taken. Holding the event lock serializes ticket
+    type changes with each other and with registrations, which lock the event first too, so
+    capacity sums and sold counts cannot change underneath us.
+    """
+    event = _get_owned_event(session, event_id, organizer_profile_id)
+    repository.lock_event(session, event_id)  # populate_existing refreshes `event`
+    return event
+
+
+def _check_capacity(event: Event, current_total: int, new_total: int) -> None:
+    """The sum of quantity_total (hidden types included) must fit the event's capacity.
+
+    A change that does not raise the sum is always allowed, so an event already over capacity
+    (update_event can lower capacity) can still be brought back down.
+    """
+    if event.capacity is None or new_total <= current_total:
+        return
+    if new_total > event.capacity:
+        raise BusinessRuleError(
+            f"Total ticket quantity ({new_total}) exceeds event capacity ({event.capacity})"
+        )
+
+
 def _ensure_event_editable(event: Event) -> None:
     if event.status in CLOSED_EVENT_STATUSES:
         raise BusinessRuleError(f"Ticket types cannot be changed on a {event.status} event")
@@ -86,8 +114,10 @@ def create_ticket_type(
     event_id: uuid.UUID,
     data: TicketTypeCreate,
 ) -> TicketTypeOut:
-    event = _get_owned_event(session, event_id, organizer_profile_id)
+    event = _lock_owned_event(session, event_id, organizer_profile_id)
     _ensure_event_editable(event)
+    current_total = repository.total_quantity_for_event(session, event.id)
+    _check_capacity(event, current_total, current_total + data.quantity_total)
 
     ticket_type = TicketType(event_id=event.id, **data.model_dump())
     repository.add(session, ticket_type)
@@ -110,13 +140,17 @@ def list_ticket_types(
 def update_ticket_type(
     session: Session,
     organizer_profile_id: uuid.UUID,
+    event_id: uuid.UUID,
     ticket_type_id: uuid.UUID,
     data: TicketTypeUpdate,
 ) -> TicketTypeOut:
+    # Ownership comes from the event in the path; the type is loaded after the lock, so it
+    # reflects any change committed by whoever held the lock before us.
+    event = _lock_owned_event(session, event_id, organizer_profile_id)
     ticket_type = repository.get_ticket_type(session, ticket_type_id)
-    if ticket_type is None:
+    # A type of another event is "not found" here, even if the organizer owns that event too.
+    if ticket_type is None or ticket_type.event_id != event.id:
         raise NotFoundError("Ticket type not found")
-    event = _get_owned_event(session, ticket_type.event_id, organizer_profile_id)
     _ensure_event_editable(event)
 
     changes = data.model_dump(exclude_unset=True)
@@ -133,6 +167,11 @@ def update_ticket_type(
         raise BusinessRuleError(
             f"quantity_total cannot be lower than tickets already sold ({sold})"
         )
+    if "quantity_total" in changes:
+        others = repository.total_quantity_for_event(session, event.id, exclude_id=ticket_type.id)
+        _check_capacity(
+            event, others + ticket_type.quantity_total, others + merged["quantity_total"]
+        )
 
     for field, value in changes.items():
         setattr(ticket_type, field, value)
@@ -144,13 +183,12 @@ def update_ticket_type(
 def list_public_ticket_types(
     session: Session, event_id: uuid.UUID, now: datetime | None = None
 ) -> list[PublicTicketTypeOut]:
-    """Visible ticket types of a published event that are on sale right now.
+    """Visible ticket types of a published public or unlisted event, on sale right now.
 
-    Sold-out types are included with available = 0. Event visibility is not checked yet.
+    Sold-out types are included with available = 0. Draft, cancelled, completed and private
+    events answer 404, the same as the public event page and registration.
     """
-    event = repository.get_event(session, event_id)
-    if event is None or event.status != EventStatus.PUBLISHED:
-        raise NotFoundError("Event not found")
+    events_service.get_public_event(session, event_id)
 
     ticket_types = repository.list_by_event(
         session, event_id, include_hidden=False, on_sale_at=now or datetime.now(UTC)

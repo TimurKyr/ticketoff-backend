@@ -1,16 +1,20 @@
+import threading
 import uuid
 from datetime import UTC, datetime, timedelta
 
 import pytest
 from pydantic import ValidationError
+from sqlalchemy import delete
 from sqlalchemy.orm import Session
 
 from app.common.errors import BusinessRuleError, NotFoundError, PermissionDeniedError
-from app.modules.events.enums import EventStatus
-from app.modules.events.models import Event
-from app.modules.identity.models import OrganizerProfile
-from app.modules.orders import service
+from app.core.db import SessionLocal
+from app.modules.events.enums import EventStatus, EventVisibility
+from app.modules.events.models import Event, Venue
+from app.modules.identity.models import OrganizerProfile, User
+from app.modules.orders import repository, service
 from app.modules.orders.enums import OrderStatus, TicketKind
+from app.modules.orders.models import TicketType
 from app.modules.orders.schemas import TicketTypeCreate, TicketTypeUpdate
 from tests.factories import (
     create_event,
@@ -18,6 +22,7 @@ from tests.factories import (
     create_organizer,
     create_ticket_type,
 )
+from tests.markers import postgres_only
 
 NOW = datetime(2026, 11, 1, 12, 0, tzinfo=UTC)
 
@@ -196,7 +201,7 @@ def test_update_applies_only_sent_fields(
     ticket_type = create_ticket_type(db_session, event, description="Keep me")
 
     out = service.update_ticket_type(
-        db_session, organizer.id, ticket_type.id, TicketTypeUpdate(name="VIP")
+        db_session, organizer.id, event.id, ticket_type.id, TicketTypeUpdate(name="VIP")
     )
 
     assert (out.name, out.description, out.price_kzt) == ("VIP", "Keep me", 5000)
@@ -208,21 +213,21 @@ def test_update_hide_and_unhide(
     ticket_type = create_ticket_type(db_session, event)
 
     hidden = service.update_ticket_type(
-        db_session, organizer.id, ticket_type.id, TicketTypeUpdate(is_hidden=True)
+        db_session, organizer.id, event.id, ticket_type.id, TicketTypeUpdate(is_hidden=True)
     )
     shown = service.update_ticket_type(
-        db_session, organizer.id, ticket_type.id, TicketTypeUpdate(is_hidden=False)
+        db_session, organizer.id, event.id, ticket_type.id, TicketTypeUpdate(is_hidden=False)
     )
 
     assert (hidden.is_hidden, shown.is_hidden) == (True, False)
 
 
 def test_update_unknown_ticket_type_raises_not_found(
-    db_session: Session, organizer: OrganizerProfile
+    db_session: Session, organizer: OrganizerProfile, event: Event
 ) -> None:
     with pytest.raises(NotFoundError):
         service.update_ticket_type(
-            db_session, organizer.id, uuid.uuid4(), TicketTypeUpdate(name="X")
+            db_session, organizer.id, event.id, uuid.uuid4(), TicketTypeUpdate(name="X")
         )
 
 
@@ -232,7 +237,7 @@ def test_update_other_organizers_ticket_type_is_denied(db_session: Session, even
 
     with pytest.raises(PermissionDeniedError):
         service.update_ticket_type(
-            db_session, stranger.id, ticket_type.id, TicketTypeUpdate(name="X")
+            db_session, stranger.id, event.id, ticket_type.id, TicketTypeUpdate(name="X")
         )
 
 
@@ -245,7 +250,7 @@ def test_update_on_closed_event_is_rejected(
 
     with pytest.raises(BusinessRuleError):
         service.update_ticket_type(
-            db_session, organizer.id, ticket_type.id, TicketTypeUpdate(is_hidden=True)
+            db_session, organizer.id, closed.id, ticket_type.id, TicketTypeUpdate(is_hidden=True)
         )
 
 
@@ -266,7 +271,7 @@ def test_update_checks_rules_on_merged_values(
 
     with pytest.raises(BusinessRuleError):
         service.update_ticket_type(
-            db_session, organizer.id, ticket_type.id, TicketTypeUpdate(**fields)
+            db_session, organizer.id, event.id, ticket_type.id, TicketTypeUpdate(**fields)
         )
 
 
@@ -278,6 +283,7 @@ def test_update_switch_kind_with_matching_price_is_allowed(
     out = service.update_ticket_type(
         db_session,
         organizer.id,
+        event.id,
         ticket_type.id,
         TicketTypeUpdate(kind=TicketKind.FREE, price_kzt=0),
     )
@@ -295,6 +301,7 @@ def test_update_kind_is_locked_after_sales(
         service.update_ticket_type(
             db_session,
             organizer.id,
+            event.id,
             ticket_type.id,
             TicketTypeUpdate(kind=TicketKind.FREE, price_kzt=0),
         )
@@ -307,7 +314,7 @@ def test_update_price_is_allowed_after_sales(
     item = create_order_item(db_session, ticket_type, 1)
 
     out = service.update_ticket_type(
-        db_session, organizer.id, ticket_type.id, TicketTypeUpdate(price_kzt=7000)
+        db_session, organizer.id, event.id, ticket_type.id, TicketTypeUpdate(price_kzt=7000)
     )
 
     assert out.price_kzt == 7000
@@ -322,7 +329,7 @@ def test_update_quantity_below_sold_is_rejected(
 
     with pytest.raises(BusinessRuleError, match="sold"):
         service.update_ticket_type(
-            db_session, organizer.id, ticket_type.id, TicketTypeUpdate(quantity_total=29)
+            db_session, organizer.id, event.id, ticket_type.id, TicketTypeUpdate(quantity_total=29)
         )
 
 
@@ -333,7 +340,7 @@ def test_update_quantity_equal_to_sold_is_allowed(
     create_order_item(db_session, ticket_type, 30)
 
     out = service.update_ticket_type(
-        db_session, organizer.id, ticket_type.id, TicketTypeUpdate(quantity_total=30)
+        db_session, organizer.id, event.id, ticket_type.id, TicketTypeUpdate(quantity_total=30)
     )
 
     assert (out.sold, out.available) == (30, 0)
@@ -403,3 +410,163 @@ def test_public_list_hides_unpublished_events(
 def test_public_list_unknown_event_raises_not_found(db_session: Session) -> None:
     with pytest.raises(NotFoundError):
         service.list_public_ticket_types(db_session, uuid.uuid4(), now=NOW)
+
+
+def test_public_list_hides_private_events(db_session: Session, organizer: OrganizerProfile) -> None:
+    private = create_event(db_session, organizer)
+    private.visibility = EventVisibility.PRIVATE
+    create_ticket_type(db_session, private)
+    db_session.flush()
+
+    with pytest.raises(NotFoundError):
+        service.list_public_ticket_types(db_session, private.id, now=NOW)
+
+
+def test_public_list_shows_unlisted_events(
+    db_session: Session, organizer: OrganizerProfile
+) -> None:
+    unlisted = create_event(db_session, organizer)
+    unlisted.visibility = EventVisibility.UNLISTED
+    ticket_type = create_ticket_type(db_session, unlisted)
+    db_session.flush()
+
+    [out] = service.list_public_ticket_types(db_session, unlisted.id, now=NOW)
+
+    assert out.id == ticket_type.id
+
+
+# --- event path and locking ---
+
+
+def test_update_type_of_another_event_is_not_found(
+    db_session: Session, organizer: OrganizerProfile, event: Event
+) -> None:
+    """Even when the organizer owns both events, the path's event must match the type."""
+    other_event = create_event(db_session, organizer)
+    foreign = create_ticket_type(db_session, other_event, name="Other")
+
+    with pytest.raises(NotFoundError, match="Ticket type not found"):
+        service.update_ticket_type(
+            db_session, organizer.id, event.id, foreign.id, TicketTypeUpdate(name="X")
+        )
+    assert foreign.name == "Other"
+
+
+def _spy(monkeypatch: pytest.MonkeyPatch, calls: list[str], *names: str) -> None:
+    for name in names:
+        real = getattr(repository, name)
+
+        def wrapper(*args: object, _real=real, _name=name, **kwargs: object) -> object:
+            calls.append(_name)
+            return _real(*args, **kwargs)
+
+        monkeypatch.setattr(repository, name, wrapper)
+
+
+def test_create_locks_event_before_summing(
+    db_session: Session,
+    organizer: OrganizerProfile,
+    event: Event,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    event.capacity = 100
+    calls: list[str] = []
+    _spy(monkeypatch, calls, "lock_event", "total_quantity_for_event")
+
+    service.create_ticket_type(db_session, organizer.id, event.id, paid_create(quantity_total=10))
+
+    assert calls == ["lock_event", "total_quantity_for_event"]
+
+
+def test_update_locks_event_before_counting(
+    db_session: Session,
+    organizer: OrganizerProfile,
+    event: Event,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    event.capacity = 100
+    ticket_type = create_ticket_type(db_session, event, quantity_total=10)
+    calls: list[str] = []
+    _spy(monkeypatch, calls, "lock_event", "sold_quantities", "total_quantity_for_event")
+
+    service.update_ticket_type(
+        db_session, organizer.id, event.id, ticket_type.id, TicketTypeUpdate(quantity_total=20)
+    )
+
+    assert calls == ["lock_event", "sold_quantities", "total_quantity_for_event"]
+
+
+# --- capacity ---
+
+
+def test_over_capacity_event_can_still_lower_a_type(
+    db_session: Session, organizer: OrganizerProfile, event: Event
+) -> None:
+    big = create_ticket_type(db_session, event, name="Big", quantity_total=60)
+    create_ticket_type(db_session, event, name="Small", quantity_total=40)
+    event.capacity = 50  # lowered after the types were created, as update_event allows
+    db_session.flush()
+
+    out = service.update_ticket_type(
+        db_session, organizer.id, event.id, big.id, TicketTypeUpdate(quantity_total=30)
+    )
+    assert out.quantity_total == 30  # sum 70 > 50, but lower than before
+
+    with pytest.raises(
+        BusinessRuleError, match=r"Total ticket quantity \(71\) exceeds event capacity \(50\)"
+    ):
+        service.update_ticket_type(
+            db_session, organizer.id, event.id, big.id, TicketTypeUpdate(quantity_total=31)
+        )
+
+
+# --- concurrency ---
+# Separate real connections, so rows are committed and deleted afterwards.
+
+RACERS = 5
+
+
+@postgres_only
+def test_concurrent_creates_cannot_exceed_capacity() -> None:
+    """Organizer tabs add types at the same moment; the event lock lets only one fit."""
+    with SessionLocal() as setup:
+        organizer = create_organizer(setup)
+        event = create_event(setup, organizer)
+        event.capacity = 1
+        setup.commit()
+        organizer_id, user_id = organizer.id, organizer.user_id
+        event_id, venue_id = event.id, event.venue_id
+
+    barrier = threading.Barrier(RACERS)
+    results: list[str] = []
+
+    def run(n: int) -> None:
+        with SessionLocal() as session:
+            barrier.wait()
+            try:
+                service.create_ticket_type(
+                    session, organizer_id, event_id, paid_create(name=f"T{n}", quantity_total=1)
+                )
+            except BusinessRuleError:
+                results.append("rejected")
+            else:
+                results.append("won")
+
+    try:
+        threads = [threading.Thread(target=run, args=(n,)) for n in range(RACERS)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=30)
+
+        assert sorted(results) == ["rejected"] * (RACERS - 1) + ["won"]
+        with SessionLocal() as check:
+            assert repository.total_quantity_for_event(check, event_id) == 1
+    finally:
+        with SessionLocal() as cleanup:
+            cleanup.execute(delete(TicketType).where(TicketType.event_id == event_id))
+            cleanup.execute(delete(Event).where(Event.id == event_id))
+            cleanup.execute(delete(Venue).where(Venue.id == venue_id))
+            cleanup.execute(delete(OrganizerProfile).where(OrganizerProfile.id == organizer_id))
+            cleanup.execute(delete(User).where(User.id == user_id))
+            cleanup.commit()
