@@ -1,17 +1,24 @@
 import uuid
 from collections.abc import Sequence
 from datetime import UTC, datetime
+from zoneinfo import ZoneInfo
 
 from sqlalchemy.orm import Session
 
 from app.common.errors import BusinessRuleError, NotFoundError, PermissionDeniedError
 from app.modules.events import service as events_service
 from app.modules.events.enums import EventStatus, SeatingType
-from app.modules.events.models import Event
+from app.modules.events.models import Event, Seat
 from app.modules.identity.models import User
 from app.modules.orders import repository
-from app.modules.orders.enums import INVENTORY_HOLDING_STATUSES, OrderStatus, TicketKind
+from app.modules.orders.enums import (
+    INVENTORY_HOLDING_STATUSES,
+    OrderStatus,
+    TicketKind,
+    TicketStatus,
+)
 from app.modules.orders.models import Attendee, Order, OrderItem, Ticket, TicketType
+from app.modules.orders.pdf import TicketPdfData, render_ticket_pdf
 from app.modules.orders.qr import issue_ticket_token
 from app.modules.orders.schemas import (
     OrderOut,
@@ -324,3 +331,53 @@ def get_my_ticket(session: Session, user: User, ticket_id: uuid.UUID) -> TicketO
     if ticket is None or ticket.order_item.order.buyer_user_id != user.id:
         raise NotFoundError("Ticket not found")
     return _ticket_out(ticket, ticket.order_item.ticket_type_id)
+
+
+# --- printable ticket ---
+
+# No printable copy of a ticket that can no longer get anyone in.
+_DEAD_TICKET_STATUSES = (TicketStatus.CANCELLED, TicketStatus.REFUNDED)
+
+
+def _venue_line(event: Event) -> str:
+    venue = event.venue
+    return ", ".join(part for part in (venue.name, venue.address, venue.city) if part)
+
+
+def _seat_line(seat: Seat | None) -> str | None:
+    if seat is None:
+        return None
+    return f"{seat.row.section.name} · Row {seat.row.label} · Seat {seat.number}"
+
+
+def get_my_ticket_pdf(session: Session, user: User, ticket_id: uuid.UUID) -> tuple[bytes, str]:
+    """A4 PDF of one of my tickets and its download filename.
+
+    The QR is the ticket's stored qr_token: no new token and no new row, so the printout
+    and the phone copy are the same entry. Checked-in tickets and tickets of completed
+    events still print; cancelled or refunded tickets and cancelled events do not.
+    """
+    ticket = repository.get_ticket_for_pdf(session, ticket_id)
+    if ticket is None or ticket.order_item.order.buyer_user_id != user.id:
+        raise NotFoundError("Ticket not found")
+    if ticket.status in _DEAD_TICKET_STATUSES:
+        raise BusinessRuleError("Ticket is no longer valid")
+    event = ticket.order_item.order.event
+    # cancel_event leaves tickets 'valid', so the event status is checked separately.
+    if event.status == EventStatus.CANCELLED:
+        raise BusinessRuleError("Event was cancelled")
+
+    # start_at is stored in UTC; a ticket shows the time at the venue.
+    tz_name = event.venue.timezone
+    data = TicketPdfData(
+        event_title=event.title,
+        starts_at_local=event.start_at.astimezone(ZoneInfo(tz_name)),
+        tz_name=tz_name,
+        venue_line=_venue_line(event),
+        ticket_type=ticket.order_item.ticket_type.name,
+        guest_name=ticket.attendee.name,
+        seat_line=_seat_line(ticket.seat),
+        ticket_id=ticket.id,
+        qr_token=ticket.qr_token,
+    )
+    return render_ticket_pdf(data), f"ticket-{ticket.id}.pdf"
