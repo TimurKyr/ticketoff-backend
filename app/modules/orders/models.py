@@ -167,3 +167,4 @@ class Ticket(Base):
 
     order_item = relationship("OrderItem", back_populates="tickets")
     attendee = relationship("Attendee")
+    seat = relationship("Seat")

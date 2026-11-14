@@ -5,7 +5,7 @@ from datetime import datetime
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, joinedload, selectinload
 
-from app.modules.events.models import Event
+from app.modules.events.models import Event, Row, Seat
 from app.modules.orders.enums import OrderStatus
 from app.modules.orders.models import Order, OrderItem, Ticket, TicketType
 
@@ -152,5 +152,26 @@ def get_ticket(session: Session, ticket_id: uuid.UUID) -> Ticket | None:
         options=(
             joinedload(Ticket.attendee),
             joinedload(Ticket.order_item).joinedload(OrderItem.order),
+        ),
+    )
+
+
+def get_ticket_for_pdf(session: Session, ticket_id: uuid.UUID) -> Ticket | None:
+    """A ticket with everything the printable PDF shows, loaded in one query.
+
+    All relationships are many-to-one, so joinedload adds no duplicate rows. The seat chain
+    is an outer join and stays None for general-admission tickets.
+    """
+    return session.get(
+        Ticket,
+        ticket_id,
+        options=(
+            joinedload(Ticket.attendee),
+            joinedload(Ticket.order_item)
+            .joinedload(OrderItem.order)
+            .joinedload(Order.event)
+            .joinedload(Event.venue),
+            joinedload(Ticket.order_item).joinedload(OrderItem.ticket_type),
+            joinedload(Ticket.seat).joinedload(Seat.row).joinedload(Row.section),
         ),
     )
