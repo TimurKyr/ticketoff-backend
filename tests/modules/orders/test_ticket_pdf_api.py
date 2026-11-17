@@ -11,7 +11,7 @@ from app.core.db import get_session
 from app.main import app
 from app.modules.events.enums import EventStatus
 from app.modules.events.models import Event, Row, Seat, VenueSection
-from app.modules.orders.enums import TicketStatus
+from app.modules.orders.enums import OrderStatus, TicketStatus
 from app.modules.orders.models import Ticket, TicketType
 from tests.factories import create_event, create_free_ticket_type, create_organizer
 from tests.markers import postgres_only
@@ -219,6 +219,34 @@ def test_cancelled_event_is_409(
 
     assert response.status_code == 409
     assert response.json() == {"detail": "Event was cancelled"}
+
+
+def _set_order_status(db_session: Session, ticket: dict, status: OrderStatus) -> None:
+    db_session.get_one(Ticket, uuid.UUID(ticket["id"])).order_item.order.status = status
+    db_session.flush()
+
+
+@pytest.mark.parametrize(
+    "status", [OrderStatus.PENDING, OrderStatus.CANCELLED, OrderStatus.REFUNDED]
+)
+def test_unconfirmed_order_is_409(
+    api: TestClient, buyer: Headers, ticket: dict, db_session: Session, status: OrderStatus
+) -> None:
+    # The ticket itself stays 'valid', so only the order status can reject it.
+    _set_order_status(db_session, ticket, status)
+
+    response = download(api, ticket["id"], buyer)
+
+    assert response.status_code == 409
+    assert response.json() == {"detail": "Order is not confirmed"}
+
+
+def test_paid_order_downloads(
+    api: TestClient, buyer: Headers, ticket: dict, db_session: Session
+) -> None:
+    _set_order_status(db_session, ticket, OrderStatus.PAID)
+
+    assert download(api, ticket["id"], buyer).status_code == 200
 
 
 # --- contract ---

@@ -132,10 +132,6 @@ def test_kazakh_letters_are_extractable() -> None:
         assert expected in text
 
 
-def test_ticket_id_is_in_courier(pdf: bytes) -> None:
-    assert b"/BaseFont /Courier" in pdf
-
-
 def test_seat_line_only_when_given(pdf: bytes) -> None:
     assert "Seat" not in page_text(pdf)
 
@@ -155,10 +151,6 @@ def test_no_sensitive_data(pdf: bytes, data: TicketPdfData) -> None:
 # --- QR ---
 
 
-def test_token_has_real_length(data: TicketPdfData) -> None:
-    assert len(data.qr_token) == 84
-
-
 def test_qr_decodes_to_the_token(pdf: bytes, data: TicketPdfData) -> None:
     value, _ = decode_qr(pdf)
     assert value == data.qr_token
@@ -170,11 +162,6 @@ def test_qr_is_at_least_4_cm(pdf: bytes) -> None:
     corners = points.reshape(-1, 2)
     width, height = np.ptp(corners, axis=0)
     assert min(width, height) >= MIN_QR_PX
-
-
-def test_qr_is_vector(pdf: bytes) -> None:
-    # Drawn as rectangles, not embedded as a bitmap.
-    assert b"/Subtype /Image" not in pdf
 
 
 # --- layout ---

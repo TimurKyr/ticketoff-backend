@@ -375,6 +375,8 @@ def get_my_ticket(session: Session, user: User, ticket_id: uuid.UUID) -> TicketO
 
 # No printable copy of a ticket that can no longer get anyone in.
 _DEAD_TICKET_STATUSES = (TicketStatus.CANCELLED, TicketStatus.REFUNDED)
+# Only a settled order's tickets print: not pending (unpaid), cancelled or refunded.
+_CONFIRMED_ORDER_STATUSES = (OrderStatus.PAID, OrderStatus.FREE_CONFIRMED)
 
 
 def _venue_line(event: Event) -> str:
@@ -393,14 +395,18 @@ def get_my_ticket_pdf(session: Session, user: User, ticket_id: uuid.UUID) -> tup
 
     The QR is the ticket's stored qr_token: no new token and no new row, so the printout
     and the phone copy are the same entry. Checked-in tickets and tickets of completed
-    events still print; cancelled or refunded tickets and cancelled events do not.
+    events still print; cancelled or refunded tickets, orders that are not paid or
+    free_confirmed, and cancelled events do not.
     """
     ticket = repository.get_ticket_for_pdf(session, ticket_id)
     if ticket is None or ticket.order_item.order.buyer_user_id != user.id:
         raise NotFoundError("Ticket not found")
     if ticket.status in _DEAD_TICKET_STATUSES:
         raise BusinessRuleError("Ticket is no longer valid")
-    event = ticket.order_item.order.event
+    order = ticket.order_item.order
+    if order.status not in _CONFIRMED_ORDER_STATUSES:
+        raise BusinessRuleError("Order is not confirmed")
+    event = order.event
     # cancel_event leaves tickets 'valid', so the event status is checked separately.
     if event.status == EventStatus.CANCELLED:
         raise BusinessRuleError("Event was cancelled")
