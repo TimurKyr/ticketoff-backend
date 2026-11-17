@@ -70,7 +70,7 @@ def _check_capacity(event: Event, current_total: int, new_total: int) -> None:
     """The sum of quantity_total (hidden types included) must fit the event's capacity.
 
     A change that does not raise the sum is always allowed, so an event already over capacity
-    (update_event can lower capacity) can still be brought back down.
+    (rows from before update_event checked capacity) can still be brought back down.
     """
     if event.capacity is None or new_total <= current_total:
         return
