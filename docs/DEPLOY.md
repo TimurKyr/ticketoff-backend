@@ -97,6 +97,23 @@ docker compose -f docker-compose.prod.yml exec -T db \
   sh -c 'pg_restore -U "$POSTGRES_USER" -d "$POSTGRES_DB" --clean --if-exists' < backups/<file>.dump
 ```
 
+## Demo data
+
+`app/scripts/seed_demo.py` creates venues (Almaty, Astana), a demo organizer, scanner and buyer,
+three published events (free, paid with active paid sales, several ticket types) and demo tickets
+in every scanner state (valid, checked in, cancelled, refunded, another event). It is idempotent:
+running it again creates nothing.
+
+```bash
+docker compose -f docker-compose.prod.yml exec -e DEMO_PASSWORD='<password>' api python -m app.scripts.seed_demo
+```
+
+- `DEMO_PASSWORD` is the password of all demo accounts (and resets it on existing ones). Without
+  it, new accounts get a random password that is printed once. Do not commit it.
+- `--print-tokens` prints the QR tokens; `--qr-dir /tmp/demo-qr` writes one PNG per ticket inside
+  the container (copy out with `docker compose -f docker-compose.prod.yml cp api:/tmp/demo-qr .`).
+- `--reset-scans` makes the demo tickets that should be valid valid again after a scanner demo.
+
 ## Current server
 
 Oracle Cloud Always Free, `VM.Standard.E2.1.Micro` (1 OCPU, 1 GB RAM + 2 GB swap), Ubuntu 24.04.
