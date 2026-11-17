@@ -1,0 +1,6 @@
+# Caddy gets and renews the Let's Encrypt certificate for API_DOMAIN automatically.
+# The DNS A record must point to this server, ports 80 and 443 open.
+{$API_DOMAIN} {
+	encode zstd gzip
+	reverse_proxy api:8000
+}
