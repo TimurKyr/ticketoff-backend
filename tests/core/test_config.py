@@ -35,3 +35,22 @@ def test_non_local_rejects_secret_equal_to_jwt_secret() -> None:
 @pytest.mark.parametrize(("ticket_secret", "jwt_secret"), [("short", "j" * 32), ("same", "same")])
 def test_local_allows_weak_secrets(ticket_secret: str, jwt_secret: str) -> None:
     assert make("local", ticket_secret, jwt_secret=jwt_secret).environment == "local"
+
+
+def test_non_local_rejects_short_jwt_secret() -> None:
+    with pytest.raises(ValidationError, match="JWT_SECRET must be at least 32 characters"):
+        make("production", STRONG, jwt_secret="j" * 31)
+
+
+@pytest.mark.parametrize("field", ["jwt_secret", "ticket_signing_secret"])
+def test_non_local_rejects_env_example_placeholders(field: str) -> None:
+    placeholder = "change-me-to-a-random-secret-of-32-plus-chars"
+    values = {"ticket_signing_secret": STRONG, "jwt_secret": "j" * 32, field: placeholder}
+    with pytest.raises(ValidationError, match="placeholder"):
+        make("production", values["ticket_signing_secret"], jwt_secret=values["jwt_secret"])
+
+
+def test_cors_origins_are_split_and_trimmed() -> None:
+    settings = make("local", "x")
+    settings.cors_origins = " https://ticketoff.store, https://www.ticketoff.store ,"
+    assert settings.cors_origin_list == ["https://ticketoff.store", "https://www.ticketoff.store"]

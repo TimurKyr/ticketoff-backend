@@ -3,13 +3,16 @@ from contextlib import asynccontextmanager
 from typing import Annotated
 
 from fastapi import Depends, FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 import app.modules.registry  # noqa: F401
+from app.core.config import get_settings
 from app.core.db import engine, get_session
+from app.core.error_handlers import add_error_handlers
 from app.modules.checkin.router import checkin_router, staff_router
 from app.modules.events.router import events_router, organizer_router, venues_router
 from app.modules.identity.router import organizer_profile_router
@@ -30,6 +33,14 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(title="ticketoff API", lifespan=lifespan)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=get_settings().cors_origin_list,
+    allow_credentials=False,  # the API uses Bearer tokens, not cookies
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+add_error_handlers(app)
 app.include_router(auth_router)
 app.include_router(organizer_profile_router)
 app.include_router(venues_router)
