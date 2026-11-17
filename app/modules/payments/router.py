@@ -1,11 +1,8 @@
 import uuid
-from collections.abc import Iterator
-from contextlib import contextmanager
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends
 
-from app.common.errors import BusinessRuleError, NotFoundError
 from app.modules.events.dependencies import require_event_owner
 from app.modules.events.models import Event
 from app.modules.identity.dependencies import CurrentUser, SessionDep
@@ -24,16 +21,6 @@ activation_router = APIRouter(prefix="/events/{event_id}/activation", tags=["act
 payments_router = APIRouter(tags=["payments"])
 
 
-@contextmanager
-def _http_errors() -> Iterator[None]:
-    try:
-        yield
-    except NotFoundError as exc:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
-    except BusinessRuleError as exc:
-        raise HTTPException(status.HTTP_409_CONFLICT, detail=str(exc)) from exc
-
-
 @activation_router.get(
     "", response_model=ActivationChecklistOut, summary="Paid sales checklist (simulated)"
 )
@@ -47,16 +34,14 @@ def get_checklist(event: OwnedEventDep, session: SessionDep) -> ActivationCheckl
     summary="Simulate identity verification and a payout account",
 )
 def simulate_verification(event: OwnedEventDep, session: SessionDep) -> ActivationChecklistOut:
-    with _http_errors():
-        return service.simulate_verification(session, event)
+    return service.simulate_verification(session, event)
 
 
 @activation_router.post(
     "/accept-terms", response_model=ActivationChecklistOut, summary="Accept paid sales terms"
 )
 def accept_terms(event: OwnedEventDep, session: SessionDep) -> ActivationChecklistOut:
-    with _http_errors():
-        return service.accept_terms(session, event)
+    return service.accept_terms(session, event)
 
 
 @activation_router.post(
@@ -65,8 +50,7 @@ def accept_terms(event: OwnedEventDep, session: SessionDep) -> ActivationCheckli
 def pay_activation(
     event: OwnedEventDep, user: CurrentUser, session: SessionDep
 ) -> ActivationChecklistOut:
-    with _http_errors():
-        return service.pay_activation(session, event, user)
+    return service.pay_activation(session, event, user)
 
 
 @payments_router.post(
@@ -78,8 +62,7 @@ def pay_order(
     order_id: uuid.UUID, payload: PayOrderIn, user: CurrentUser, session: SessionDep
 ) -> PaymentResultOut:
     """200 for both results: on "fail" the payment is failed and the order stays pending."""
-    with _http_errors():
-        return service.pay_order(session, user, order_id, payload)
+    return service.pay_order(session, user, order_id, payload)
 
 
 @payments_router.get(

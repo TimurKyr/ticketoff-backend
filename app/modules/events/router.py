@@ -1,18 +1,10 @@
 import uuid
-from collections.abc import Iterator
-from contextlib import contextmanager
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, Query, status
 from pydantic import AwareDatetime
 from sqlalchemy.orm import Session
 
-from app.common.errors import (
-    BusinessRuleError,
-    InvalidInputError,
-    NotFoundError,
-    PermissionDeniedError,
-)
 from app.core.db import get_session
 from app.modules.events import service
 from app.modules.events.dependencies import require_event_owner
@@ -39,20 +31,6 @@ events_router = APIRouter(prefix="/events", tags=["events"])
 organizer_router = APIRouter(prefix="/organizer/events", tags=["organizer-events"])
 
 
-@contextmanager
-def _http_errors() -> Iterator[None]:
-    try:
-        yield
-    except NotFoundError as exc:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
-    except PermissionDeniedError as exc:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
-    except BusinessRuleError as exc:
-        raise HTTPException(status.HTTP_409_CONFLICT, detail=str(exc)) from exc
-    except InvalidInputError as exc:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
-
-
 @venues_router.get("", response_model=list[VenueOut], summary="List venues")
 def list_venues(session: SessionDep) -> list:
     return service.list_venues(session)
@@ -65,8 +43,7 @@ def list_venues(session: SessionDep) -> list:
     summary="Create a draft event",
 )
 def create_event(payload: EventCreate, organizer: OrganizerDep, session: SessionDep) -> Event:
-    with _http_errors():
-        return service.create_event(session, organizer, payload)
+    return service.create_event(session, organizer, payload)
 
 
 @events_router.get("", response_model=EventPage, summary="Public list of published events")
@@ -95,14 +72,12 @@ def list_public_events(
 
 @events_router.get("/{event_id}", response_model=EventOut, summary="Public event page")
 def get_event(event_id: uuid.UUID, session: SessionDep) -> Event:
-    with _http_errors():
-        return service.get_public_event(session, event_id)
+    return service.get_public_event(session, event_id)
 
 
 @events_router.patch("/{event_id}", response_model=EventOut, summary="Edit an event")
 def update_event(payload: EventUpdate, event: OwnedEventDep, session: SessionDep) -> Event:
-    with _http_errors():
-        return service.update_event(session, event, payload)
+    return service.update_event(session, event, payload)
 
 
 @events_router.post(
@@ -112,26 +87,22 @@ def update_event(payload: EventUpdate, event: OwnedEventDep, session: SessionDep
     summary="Duplicate an event into a new draft",
 )
 def duplicate_event(event: OwnedEventDep, session: SessionDep) -> Event:
-    with _http_errors():
-        return service.duplicate_event(session, event)
+    return service.duplicate_event(session, event)
 
 
 @events_router.post("/{event_id}/publish", response_model=EventOut, summary="Publish a draft")
 def publish_event(event: OwnedEventDep, session: SessionDep) -> Event:
-    with _http_errors():
-        return service.publish_event(session, event)
+    return service.publish_event(session, event)
 
 
 @events_router.post("/{event_id}/unpublish", response_model=EventOut, summary="Back to draft")
 def unpublish_event(event: OwnedEventDep, session: SessionDep) -> Event:
-    with _http_errors():
-        return service.unpublish_event(session, event)
+    return service.unpublish_event(session, event)
 
 
 @events_router.post("/{event_id}/cancel", response_model=EventOut, summary="Cancel an event")
 def cancel_event(event: OwnedEventDep, session: SessionDep) -> Event:
-    with _http_errors():
-        return service.cancel_event(session, event)
+    return service.cancel_event(session, event)
 
 
 @organizer_router.get("", response_model=EventPage, summary="My events, optionally by bucket")

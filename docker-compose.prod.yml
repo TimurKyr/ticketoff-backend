@@ -28,6 +28,7 @@ services:
       TICKET_SIGNING_SECRET: ${TICKET_SIGNING_SECRET:?set TICKET_SIGNING_SECRET in .env}
       JWT_ALGORITHM: ${JWT_ALGORITHM:-HS256}
       ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-30}
+      CORS_ORIGINS: ${CORS_ORIGINS:-https://ticketoff.store,https://www.ticketoff.store}
     expose:
       - "8000"
     depends_on:

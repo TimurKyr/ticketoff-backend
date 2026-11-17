@@ -12,10 +12,6 @@ from app.modules.identity.security import hash_password, verify_password
 _DUMMY_HASH = hash_password("not-a-real-password")
 
 
-class EmailAlreadyRegisteredError(Exception):
-    pass
-
-
 def normalize_email(email: str) -> str:
     return email.strip().lower()
 
@@ -27,7 +23,7 @@ def register_user(session: Session, email: str, password: str) -> User:
         session.commit()
     except IntegrityError as exc:  # unique index on users.email
         session.rollback()
-        raise EmailAlreadyRegisteredError from exc
+        raise BusinessRuleError("Email already registered") from exc
     return user
 
 
