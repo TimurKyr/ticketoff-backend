@@ -1,7 +1,7 @@
 from functools import lru_cache
 from typing import Self
 
-from pydantic import model_validator
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 MIN_TICKET_SECRET_LENGTH = 32
@@ -17,6 +17,11 @@ class Settings(BaseSettings):
     # Separate from jwt_secret: signs ticket QR tokens, which never expire.
     ticket_signing_secret: str
     environment: str = "local"
+    # Simulated payments (BE-14). The fee must be positive: ck_payments_amount_positive.
+    activation_fee_kzt: int = Field(default=5000, ge=1)
+    processing_fee_percent: int = Field(default=3, ge=0, le=100)
+    # How long a pending paid order holds inventory before it expires.
+    checkout_hold_minutes: int = Field(default=15, ge=1)
 
     @model_validator(mode="after")
     def check_ticket_signing_secret(self) -> Self:

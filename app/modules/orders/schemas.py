@@ -161,6 +161,14 @@ class RegistrationCreate(BaseModel):
         return sum(item.quantity for item in self.items)
 
 
+class CheckoutCreate(RegistrationCreate):
+    """Paid checkout: the same shape as a free registration, for paid ticket types only.
+
+    One attendee per ticket, matched in item order. The client never sends prices; unknown
+    fields such as a price are ignored and the total comes from the ticket types.
+    """
+
+
 class OrderItemOut(BaseModel):
     ticket_type_id: uuid.UUID
     quantity: int
@@ -188,3 +196,5 @@ class OrderOut(BaseModel):
     total_kzt: int
     items: list[OrderItemOut]
     tickets: list[TicketOut]
+    # Pending (unpaid) orders only: after this the order no longer holds its tickets.
+    expires_at: datetime | None = None

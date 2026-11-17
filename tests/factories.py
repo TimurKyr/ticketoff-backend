@@ -66,12 +66,17 @@ def create_order_item(
     ticket_type: TicketType,
     quantity: int,
     status: OrderStatus = OrderStatus.PAID,
+    created_at: datetime | None = None,
 ) -> OrderItem:
+    """An order with one item. created_at defaults to the DB's now() (transaction start);
+    set it to test checkout expiry."""
     order = Order(
         buyer_user_id=create_user(session).id,
         event_id=ticket_type.event_id,
         status=status,
     )
+    if created_at is not None:
+        order.created_at = created_at
     session.add(order)
     session.flush()
     item = OrderItem(

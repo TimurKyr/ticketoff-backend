@@ -7,8 +7,8 @@ from sqlalchemy.orm import Session
 from app.modules.events.enums import EventStatus, EventVisibility
 from app.modules.events.models import Event, Venue
 from app.modules.events.schemas import EventBucket
-from app.modules.orders.enums import OrderStatus
 from app.modules.orders.models import Order
+from app.modules.orders.repository import checkout_hold, holding_orders_clause
 
 
 def list_venues(session: Session) -> list[Venue]:
@@ -23,8 +23,13 @@ def get_event(session: Session, event_id: uuid.UUID) -> Event | None:
     return session.get(Event, event_id)
 
 
-def has_orders(session: Session, event_id: uuid.UUID, statuses: list[OrderStatus]) -> bool:
-    stmt = select(Order.id).where(Order.event_id == event_id, Order.status.in_(statuses)).limit(1)
+def has_orders(session: Session, event_id: uuid.UUID, now: datetime) -> bool:
+    """Whether any order holds tickets for the event at `now` (expired checkouts don't)."""
+    stmt = (
+        select(Order.id)
+        .where(Order.event_id == event_id, holding_orders_clause(now, checkout_hold()))
+        .limit(1)
+    )
     return session.scalar(stmt) is not None
 
 

@@ -126,6 +126,7 @@ class OrderItem(Base):
     order = relationship("Order", back_populates="items")
     ticket_type = relationship("TicketType")
     tickets = relationship("Ticket", back_populates="order_item")
+    attendees = relationship("Attendee", back_populates="order_item")
 
 
 class Attendee(Base):
@@ -138,10 +139,18 @@ class Attendee(Base):
         nullable=False,
         index=True,
     )
+    # The item whose ticket this attendee gets. Paid orders issue tickets only on payment,
+    # so the link must be stored. NULL for attendees created before BE-14.
+    order_item_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("order_items.id"),
+        index=True,
+    )
     name = Column(String, nullable=False)
     email = Column(String)
 
     order = relationship("Order", back_populates="attendees")
+    order_item = relationship("OrderItem", back_populates="attendees")
 
 
 class Ticket(Base):
