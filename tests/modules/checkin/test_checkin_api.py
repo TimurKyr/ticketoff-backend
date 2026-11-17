@@ -249,8 +249,10 @@ def test_owner_may_scan_without_assignment(client: TestClient, door: Door) -> No
     assert _scan(client, door, ticket.qr_token, headers=door.owner)["result"] == "checked_in"
 
 
-def test_unassigned_user_gets_403(client: TestClient, door: Door) -> None:
+def test_unassigned_user_gets_404_like_a_missing_event(client: TestClient, door: Door) -> None:
+    """Someone else's event is not revealed: same 404 as an unknown id."""
     ticket = door.add_ticket()
+    base = f"/checkin/events/{door.event.id}"
 
     response = client.post(
         "/checkin/scan",
@@ -258,11 +260,23 @@ def test_unassigned_user_gets_403(client: TestClient, door: Door) -> None:
         headers=door.outsider,
     )
 
-    assert response.status_code == 403
-    assert (
-        client.get(f"/checkin/events/{door.event.id}/stats", headers=door.outsider).status_code
-        == 403
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Event not found"}
+    assert client.get(f"{base}/stats", headers=door.outsider).status_code == 404
+    assert client.get(f"{base}/attendees", headers=door.outsider).status_code == 404
+
+
+def test_staff_of_another_event_gets_404(client: TestClient, door: Door, db: Session) -> None:
+    owner_user, _ = _user(db, organizer=True)
+    other_event = _make_event(db, owner_user)
+
+    response = client.post(
+        "/checkin/scan",
+        json={"event_id": str(other_event.id), "qr_token": "tk1.x"},
+        headers=door.staff,
     )
+
+    assert response.status_code == 404
 
 
 def test_unknown_event_is_404(client: TestClient, door: Door) -> None:
@@ -273,6 +287,34 @@ def test_unknown_event_is_404(client: TestClient, door: Door) -> None:
     )
 
     assert response.status_code == 404
+
+
+def _set_status(db: Session, event: Event, status: EventStatus) -> None:
+    db.get(Event, event.id).status = status
+    db.commit()
+
+
+def test_scan_on_a_cancelled_event_admits_nobody(
+    client: TestClient, door: Door, db: Session
+) -> None:
+    ticket = door.add_ticket()
+    _set_status(db, door.event, EventStatus.CANCELLED)
+
+    body = _scan(client, door, ticket.qr_token)
+
+    assert body["result"] == "event_cancelled"
+    assert body["ticket"] is None
+    db.expire_all()
+    assert db.get(Ticket, ticket.id).status == TicketStatus.VALID
+
+
+def test_scan_on_a_draft_event_is_invalid(client: TestClient, door: Door, db: Session) -> None:
+    ticket = door.add_ticket()
+    _set_status(db, door.event, EventStatus.DRAFT)
+
+    assert _scan(client, door, ticket.qr_token)["result"] == "invalid"
+    db.expire_all()
+    assert db.get(Ticket, ticket.id).status == TicketStatus.VALID
 
 
 def test_scan_requires_login(client: TestClient, door: Door) -> None:
@@ -305,13 +347,39 @@ def test_undo_of_a_ticket_that_is_not_checked_in_is_409(client: TestClient, door
     assert client.post(f"/checkin/tickets/{ticket.id}/undo", headers=door.staff).status_code == 409
 
 
-def test_undo_by_unassigned_user_is_403(client: TestClient, door: Door) -> None:
+def test_undo_of_a_foreign_ticket_looks_like_an_unknown_one(client: TestClient, door: Door) -> None:
     ticket = door.add_ticket()
     _scan(client, door, ticket.qr_token)
 
-    response = client.post(f"/checkin/tickets/{ticket.id}/undo", headers=door.outsider)
+    foreign = client.post(f"/checkin/tickets/{ticket.id}/undo", headers=door.outsider)
+    unknown = client.post(f"/checkin/tickets/{uuid.uuid4()}/undo", headers=door.outsider)
 
-    assert response.status_code == 403
+    assert (foreign.status_code, foreign.json()) == (404, {"detail": "Ticket not found"})
+    assert (unknown.status_code, unknown.json()) == (404, {"detail": "Ticket not found"})
+    # The outsider changed nothing: the ticket is still checked in.
+    assert _scan(client, door, ticket.qr_token)["result"] == "already_used"
+
+
+@postgres_only
+def test_undo_checks_access_before_locking_the_ticket(client: TestClient, door: Door) -> None:
+    """An outsider's undo answers 404 at once, without waiting for the ticket row lock."""
+    ticket = door.add_ticket()
+    statuses: list[int] = []
+    with SessionLocal() as holder:
+        checkin_repository.get_ticket_for_update(holder, ticket.id)  # held until rollback
+        thread = threading.Thread(
+            target=lambda: statuses.append(
+                client.post(f"/checkin/tickets/{ticket.id}/undo", headers=door.outsider).status_code
+            )
+        )
+        thread.start()
+        thread.join(timeout=2)
+        answered_while_locked = not thread.is_alive()
+        holder.rollback()
+    thread.join(timeout=10)
+
+    assert answered_while_locked, "undo waited for the lock before checking access"
+    assert statuses == [404]
 
 
 @postgres_only
@@ -392,6 +460,40 @@ def test_my_events_marks_owned_events(client: TestClient, door: Door) -> None:
     assert client.get("/checkin/my-events", headers=door.outsider).json() == []
 
 
+def test_my_events_include_the_venue(client: TestClient, door: Door, db: Session) -> None:
+    venue = db.get(Venue, door.event.venue_id)
+    venue.address = "Abay Ave 1"
+    venue.timezone = "Asia/Aqtobe"
+    db.commit()
+
+    (event,) = client.get("/checkin/my-events", headers=door.staff).json()
+
+    assert (event["venue_name"], event["venue_address"], event["timezone"]) == (
+        venue.name,
+        "Abay Ave 1",
+        "Asia/Aqtobe",
+    )
+
+
+def test_me_lists_staff_events_once_in_a_stable_order(
+    client: TestClient, door: Door, db: Session
+) -> None:
+    owner_user, _ = _user(db, organizer=True)
+    other_event = _make_event(db, owner_user)
+    # No unique constraint on (event, user) yet, so a duplicate row can exist.
+    db.add_all(
+        [
+            StaffAssignment(event_id=other_event.id, user_id=door.staff_user.id),
+            StaffAssignment(event_id=door.event.id, user_id=door.staff_user.id),
+        ]
+    )
+    db.commit()
+
+    ids = client.get("/auth/me", headers=door.staff).json()["staff_event_ids"]
+
+    assert ids == sorted({str(door.event.id), str(other_event.id)}, key=uuid.UUID)
+
+
 # --- door-side lists ----------------------------------------------------------------------------
 
 
@@ -402,8 +504,8 @@ def test_attendee_search_and_stats(client: TestClient, door: Door) -> None:
     _scan(client, door, arrived.qr_token)
     base = f"/checkin/events/{door.event.id}"
 
-    found = client.get(f"{base}/attendees", params={"q": "aig"}, headers=door.staff).json()
-    everyone = client.get(f"{base}/attendees", headers=door.staff).json()
+    found = client.get(f"{base}/attendees", params={"q": "aig"}, headers=door.staff).json()["items"]
+    everyone = client.get(f"{base}/attendees", headers=door.staff).json()["items"]
     stats = client.get(f"{base}/stats", headers=door.staff).json()
 
     assert [(r["attendee_name"], r["status"]) for r in found] == [("Aigerim", "checked_in")]
@@ -418,7 +520,23 @@ def test_attendee_search_treats_wildcards_literally(client: TestClient, door: Do
         f"/checkin/events/{door.event.id}/attendees", params={"q": "%"}, headers=door.staff
     )
 
-    assert response.json() == []
+    assert response.json() == {"items": [], "total": 0, "limit": 50, "offset": 0}
+
+
+def test_attendees_are_paged(client: TestClient, door: Door) -> None:
+    for name in ("Aigerim", "Bolat", "Dana", "Erlan", "Farida"):
+        door.add_ticket(name=name)
+    url = f"/checkin/events/{door.event.id}/attendees"
+
+    page = client.get(url, params={"limit": 2, "offset": 2}, headers=door.staff).json()
+
+    assert [r["attendee_name"] for r in page["items"]] == ["Dana", "Erlan"]
+    assert (page["total"], page["limit"], page["offset"]) == (5, 2, 2)
+    last = client.get(url, params={"limit": 2, "offset": 4}, headers=door.staff).json()
+    assert [r["attendee_name"] for r in last["items"]] == ["Farida"]
+    filtered = client.get(url, params={"q": "da", "limit": 1}, headers=door.staff).json()
+    assert filtered["total"] == 2  # Dana, Farida
+    assert client.get(url, params={"offset": -1}, headers=door.staff).status_code == 422
 
 
 def test_stats_of_an_empty_event(client: TestClient, door: Door) -> None:

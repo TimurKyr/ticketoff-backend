@@ -71,7 +71,10 @@ def update_organizer_profile(session: Session, user: User, display_name: str) ->
 def get_me(session: Session, user: User) -> MeOut:
     profile = find_organizer_profile(session, user)
     staff_event_ids = session.scalars(
-        select(StaffAssignment.event_id).where(StaffAssignment.user_id == user.id)
+        select(StaffAssignment.event_id)
+        .where(StaffAssignment.user_id == user.id)
+        .distinct()
+        .order_by(StaffAssignment.event_id)
     ).all()
     return MeOut(
         **UserOut.model_validate(user).model_dump(),
