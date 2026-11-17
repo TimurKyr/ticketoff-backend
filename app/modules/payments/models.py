@@ -11,6 +11,7 @@ from sqlalchemy import (
     String,
     func,
     text,
+    true,
 )
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
@@ -38,6 +39,8 @@ class Payment(Base):
             name="activation_links_event_only",
         ),
         CheckConstraint("amount_kzt > 0", name="amount_positive"),
+        # MVP: no real money. The DB refuses a non-simulated payment from any code path.
+        CheckConstraint("is_simulated", name="is_simulated"),
         # At most one succeeded payment per order and per event activation, so a double
         # pay is refused by the DB even if the row lock in the service were bypassed.
         Index(
@@ -60,7 +63,8 @@ class Payment(Base):
     purpose = Column(enum_column(PaymentPurpose), nullable=False)
     status = Column(enum_column(PaymentStatus), nullable=False, default=PaymentStatus.PENDING)
     # Always true in the MVP: demo payments must never look like real transactions.
-    is_simulated = Column(Boolean, nullable=False, default=True)
+    # Enforced by ck_payments_is_simulated; the server default covers raw SQL inserts.
+    is_simulated = Column(Boolean, nullable=False, default=True, server_default=true())
     amount_kzt = Column(Integer, nullable=False)
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
