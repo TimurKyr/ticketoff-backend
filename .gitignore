@@ -13,6 +13,7 @@ dist/
 .env
 .env.*
 !.env.example
+!.env.prod.example
 
 # Tooling
 .mypy_cache/
@@ -29,3 +30,6 @@ htmlcov/
 .idea/
 .vscode/
 .DS_Store
+
+# Production DB dumps (server)
+backups/

@@ -1,0 +1,56 @@
+# Production stack: Postgres + API + Caddy (automatic HTTPS).
+# Usage on the server: docker compose -f docker-compose.prod.yml up -d --build
+# Secrets live only in .env on the server (see .env.prod.example).
+services:
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-ticketoff}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-ticketoff}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build: .
+    restart: unless-stopped
+    # The image runs `alembic upgrade head` before starting uvicorn.
+    environment:
+      ENVIRONMENT: ${ENVIRONMENT:-production}
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-ticketoff}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-ticketoff}
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env}
+      TICKET_SIGNING_SECRET: ${TICKET_SIGNING_SECRET:?set TICKET_SIGNING_SECRET in .env}
+      JWT_ALGORITHM: ${JWT_ALGORITHM:-HS256}
+      ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-30}
+    expose:
+      - "8000"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    environment:
+      API_DOMAIN: ${API_DOMAIN:-api.ticketoff.store}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - api
+
+volumes:
+  pgdata:
+  caddy_data:
+  caddy_config:
