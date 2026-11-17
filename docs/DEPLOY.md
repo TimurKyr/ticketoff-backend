@@ -59,8 +59,23 @@ Caddy serves the static build of `ticketoff-web` from `/opt/ticketoff/web` (moun
 ```bash
 # in ticketoff-web
 npm ci && npm run build
-rsync -az --delete --delay-updates dist/ ubuntu@<server>:/opt/ticketoff/web/
+rsync -az --delete --filter='P /assets/**' --delay-updates dist/ ubuntu@<server>:/opt/ticketoff/web/
 ```
+
+Before the first `up` with this mount, create the folder as `ubuntu`. Otherwise Docker Engine on
+Linux creates `./web` as `root:root` and `rsync` fails with `Permission denied`:
+
+```bash
+mkdir -p /opt/ticketoff/web
+# if Docker already created it:
+sudo chown ubuntu:ubuntu /opt/ticketoff/web
+```
+
+DNS: `www` needs its own record (here a CNAME to `ticketoff.store`), or Caddy keeps retrying its
+certificate; the apex domain works either way.
+
+A missing file under `/assets/` is a plain 404 (`no-store`), not `index.html`. The deploy script
+keeps old `assets/` files, so tabs opened before a deploy can still load their chunks.
 
 A new upload needs no restart. After changing `deploy/Caddyfile`:
 `docker compose -f docker-compose.prod.yml up -d caddy` (recreated if the mount changed) or
