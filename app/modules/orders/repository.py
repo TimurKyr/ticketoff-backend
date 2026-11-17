@@ -72,6 +72,21 @@ def held_quantity_for_event(
     return int(session.scalar(stmt) or 0)
 
 
+def total_quantity_for_event(
+    session: Session, event_id: uuid.UUID, exclude_id: uuid.UUID | None = None
+) -> int:
+    """Sum of quantity_total over the event's ticket types, hidden ones included.
+
+    exclude_id leaves one type out (the one being updated).
+    """
+    stmt = select(func.coalesce(func.sum(TicketType.quantity_total), 0)).where(
+        TicketType.event_id == event_id
+    )
+    if exclude_id is not None:
+        stmt = stmt.where(TicketType.id != exclude_id)
+    return int(session.scalar(stmt) or 0)
+
+
 def add(session: Session, ticket_type: TicketType) -> None:
     session.add(ticket_type)
     session.flush()
