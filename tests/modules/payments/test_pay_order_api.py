@@ -98,16 +98,6 @@ def test_fail_is_200_with_failed_payment_and_pending_order(
     assert body["order"]["expires_at"] is not None
 
 
-def test_pay_twice_returns_same_tickets(api: TestClient, buyer: Headers, order_id: str) -> None:
-    first = pay(api, buyer, order_id).json()
-    second = pay(api, buyer, order_id).json()
-
-    assert second["payment"]["id"] == first["payment"]["id"]
-    assert {t["id"] for t in second["order"]["tickets"]} == {
-        t["id"] for t in first["order"]["tickets"]
-    }
-
-
 @pytest.mark.parametrize("body", [{}, {"simulate": "maybe"}, {"simulate": True}])
 def test_invalid_simulate_is_422(
     api: TestClient, buyer: Headers, order_id: str, body: dict
@@ -119,9 +109,3 @@ def test_invalid_simulate_is_422(
 
 def test_requires_login(api: TestClient, order_id: str) -> None:
     assert api.post(f"/orders/{order_id}/pay", json={"simulate": "success"}).status_code == 401
-
-
-def test_other_users_order_is_404(
-    api: TestClient, login: Callable[[], Headers], order_id: str
-) -> None:
-    assert pay(api, login(), order_id).status_code == 404

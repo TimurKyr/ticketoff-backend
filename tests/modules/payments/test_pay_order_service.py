@@ -8,6 +8,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.common.errors import BusinessRuleError, NotFoundError
+from app.modules.audit.models import AuditLog
 from app.modules.events.enums import EventStatus
 from app.modules.events.models import Event
 from app.modules.identity.models import User
@@ -272,3 +273,95 @@ def test_paid_sales_off_after_checkout_is_409(
 
     assert _payments(db_session, pending.id) == []
     assert db_session.get(Order, pending.id).status == OrderStatus.PENDING
+
+
+def test_event_already_started_is_409(
+    db_session: Session, buyer: User, event: Event, pending: OrderOut
+) -> None:
+    # The checkout was fine; the event starts while the order is still held.
+    event.start_at = datetime.now(UTC) - timedelta(minutes=1)
+    db_session.flush()
+
+    with pytest.raises(BusinessRuleError, match="Event has already started"):
+        service.pay_order(db_session, buyer, pending.id, SUCCESS)
+
+    assert _payments(db_session, pending.id) == []
+    assert _audit_rows(db_session, event) == []
+    assert db_session.get(Order, pending.id).status == OrderStatus.PENDING
+
+
+def test_pay_just_before_start_is_allowed(
+    db_session: Session, buyer: User, event: Event, pending: OrderOut
+) -> None:
+    now = datetime.now(UTC)
+    event.start_at = now + timedelta(seconds=1)
+    db_session.flush()
+
+    result = service.pay_order(db_session, buyer, pending.id, SUCCESS, now=now)
+
+    assert result.order.status == OrderStatus.PAID
+
+
+# --- audit ---
+
+
+def _audit_rows(session: Session, event: Event) -> list[AuditLog]:
+    return list(
+        session.scalars(
+            select(AuditLog).where(AuditLog.event_id == event.id).order_by(AuditLog.created_at)
+        )
+    )
+
+
+@pytest.mark.parametrize(
+    ("simulate", "action_type"),
+    [(SUCCESS, "payment.order_succeeded"), (FAIL, "payment.order_failed")],
+)
+def test_pay_writes_one_audit_row(
+    db_session: Session,
+    buyer: User,
+    event: Event,
+    pending: OrderOut,
+    simulate: PayOrderIn,
+    action_type: str,
+) -> None:
+    result = service.pay_order(db_session, buyer, pending.id, simulate)
+
+    [row] = _audit_rows(db_session, event)
+    assert (row.action_type, row.entity_type, row.entity_id) == (
+        action_type,
+        "payment",
+        result.payment.id,
+    )
+    assert (row.actor_user_id, row.event_id) == (buyer.id, event.id)
+    assert row.details == {
+        "amount_kzt": 30000,
+        "order_id": str(pending.id),
+        "is_simulated": True,
+    }
+
+
+def test_repeated_pay_of_a_paid_order_writes_no_new_audit_row(
+    db_session: Session, buyer: User, event: Event, pending: OrderOut
+) -> None:
+    service.pay_order(db_session, buyer, pending.id, SUCCESS)
+
+    service.pay_order(db_session, buyer, pending.id, SUCCESS)
+    service.pay_order(db_session, buyer, pending.id, FAIL)  # also returns the paid result
+
+    assert [row.action_type for row in _audit_rows(db_session, event)] == [
+        "payment.order_succeeded"
+    ]
+
+
+def test_fail_then_success_writes_one_row_per_payment(
+    db_session: Session, buyer: User, event: Event, pending: OrderOut
+) -> None:
+    failed = service.pay_order(db_session, buyer, pending.id, FAIL)
+    paid = service.pay_order(db_session, buyer, pending.id, SUCCESS)
+
+    rows = _audit_rows(db_session, event)
+    assert {(r.action_type, r.entity_id) for r in rows} == {
+        ("payment.order_failed", failed.payment.id),
+        ("payment.order_succeeded", paid.payment.id),
+    }

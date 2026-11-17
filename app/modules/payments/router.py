@@ -62,9 +62,11 @@ def accept_terms(event: OwnedEventDep, session: SessionDep) -> ActivationCheckli
 @activation_router.post(
     "/pay", response_model=ActivationChecklistOut, summary="Pay the activation fee (simulated)"
 )
-def pay_activation(event: OwnedEventDep, session: SessionDep) -> ActivationChecklistOut:
+def pay_activation(
+    event: OwnedEventDep, user: CurrentUser, session: SessionDep
+) -> ActivationChecklistOut:
     with _http_errors():
-        return service.pay_activation(session, event)
+        return service.pay_activation(session, event, user)
 
 
 @payments_router.post(

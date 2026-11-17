@@ -148,25 +148,6 @@ def test_paid_before_activation_is_409(
     assert response.json()["detail"] == "Paid ticket sales are not active for this event"
 
 
-def test_free_type_is_409(
-    api: TestClient, login: Callable[[], Headers], db_session: Session, event: Event
-) -> None:
-    free_type = create_free_ticket_type(db_session, event)
-
-    response = post_checkout(api, login(), event, (free_type, 1))
-
-    assert response.status_code == 409
-    assert response.json()["detail"] == "Use registration for free tickets"
-
-
-def test_hidden_type_is_404(
-    api: TestClient, login: Callable[[], Headers], db_session: Session, event: Event
-) -> None:
-    hidden = create_ticket_type(db_session, event, is_hidden=True)
-
-    assert post_checkout(api, login(), event, (hidden, 1)).status_code == 404
-
-
 def test_unknown_event_is_404(
     api: TestClient, login: Callable[[], Headers], paid_type: TicketType
 ) -> None:

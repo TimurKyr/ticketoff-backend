@@ -108,9 +108,10 @@ def add(session: Session, ticket_type: TicketType) -> None:
     session.flush()
 
 
-# Lock order for anything that changes inventory: the event row first, then its ticket
-# types in id order. Every caller (free registration, paid checkout) must follow it, so
-# concurrent transactions never wait on each other in a cycle.
+# Lock order for anything that changes inventory: the event row first, then the rest
+# (its ticket types in id order, or the order being paid). Every caller (free
+# registration, paid checkout, pay) must follow it, so concurrent transactions never wait
+# on each other in a cycle.
 
 
 def lock_event(session: Session, event_id: uuid.UUID) -> Event | None:
@@ -168,11 +169,16 @@ def get_order_with_details(
     return session.get(Order, order_id, options=[_ORDER_DETAILS], populate_existing=reload)
 
 
+def get_order(session: Session, order_id: uuid.UUID) -> Order | None:
+    """An order without any lock (e.g. to find its event before locking)."""
+    return session.get(Order, order_id)
+
+
 def lock_order(session: Session, order_id: uuid.UUID) -> Order | None:
     """SELECT ... FROM orders WHERE id = :id FOR UPDATE, held until commit or rollback.
 
-    Serializes payments of one order. Pay takes only this lock (never the event or ticket
-    type locks), so it cannot form a cycle with checkout or registration.
+    Serializes payments of one order. Pay locks the order's event first and this row
+    second; nothing locks an order before an event, so this cannot form a cycle.
     """
     stmt = (
         select(Order)

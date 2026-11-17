@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from app.common.errors import BusinessRuleError, NotFoundError
 from app.core.config import get_settings
+from app.modules.audit.models import AuditLog
 from app.modules.events.enums import EventStatus
 from app.modules.events.models import Event
 from app.modules.identity.enums import PayoutAccountStatus, VerificationStatus
@@ -68,6 +69,34 @@ def _maybe_activate(session: Session, event: Event) -> ActivationChecklistOut:
     return checklist
 
 
+def _audit_payment(
+    session: Session, payment: Payment, actor: User, event_id: uuid.UUID, action_type: str
+) -> None:
+    """Audit row for a new payment, flushed into the payment's own transaction.
+
+    Only called when a payment row is created, so an idempotent repeat writes nothing.
+    event_id is passed in: an order payment reaches its event through the order and must
+    not carry event_id itself (ck_payments_ticket_order_links_order_only).
+    """
+    details: dict[str, object] = {
+        "amount_kzt": payment.amount_kzt,
+        "is_simulated": payment.is_simulated,
+    }
+    if payment.order_id is not None:
+        details["order_id"] = str(payment.order_id)
+    repository.add_audit_log(
+        session,
+        AuditLog(
+            actor_user_id=actor.id,
+            event_id=event_id,
+            action_type=action_type,
+            entity_type="payment",
+            entity_id=payment.id,
+            details=details,
+        ),
+    )
+
+
 def _lock_open_event(session: Session, event_id: uuid.UUID) -> Event:
     """Lock the event row first, so two concurrent "last steps" cannot both read an
     incomplete checklist and leave the event inactive."""
@@ -117,20 +146,19 @@ def accept_terms(
     return _finish_step(session, event)
 
 
-def pay_activation(session: Session, event: Event) -> ActivationChecklistOut:
-    """Simulated activation fee. Paying again creates no second payment."""
+def pay_activation(session: Session, event: Event, user: User) -> ActivationChecklistOut:
+    """Simulated activation fee. Paying again creates no second payment and no audit row."""
     event = _lock_open_event(session, event.id)
     if repository.get_succeeded_activation(session, event.id) is None:
-        repository.add_payment(
-            session,
-            Payment(
-                purpose=PaymentPurpose.ACTIVATION,
-                event_id=event.id,
-                amount_kzt=get_settings().activation_fee_kzt,
-                status=PaymentStatus.SUCCEEDED,
-                is_simulated=True,
-            ),
+        payment = Payment(
+            purpose=PaymentPurpose.ACTIVATION,
+            event_id=event.id,
+            amount_kzt=get_settings().activation_fee_kzt,
+            status=PaymentStatus.SUCCEEDED,
+            is_simulated=True,
         )
+        repository.add_payment(session, payment)
+        _audit_payment(session, payment, user, event.id, "payment.activation_succeeded")
     return _finish_step(session, event)
 
 
@@ -156,27 +184,38 @@ def pay_order(
 ) -> PaymentResultOut:
     """Pay a pending checkout order with a simulated card result.
 
-    The order row is locked (FOR UPDATE) first, so two pays of the same order run one
-    after the other: the second sees status = paid and returns the same result. The time is
-    compared once, under that lock. Only the order is locked, so this cannot deadlock with
-    checkout or registration (event -> ticket types).
+    Locks (FOR UPDATE) the order's event first, then the order: the same order as checkout
+    and registration (event first, then the rest), so they never wait on each other in a
+    cycle. The event lock serializes pay with checkouts of the same event, and the clock
+    is read only after both locks. So a checkout that already counted this order as expired
+    and sold its tickets has committed before pay looks at the time, and pay sees the order
+    expired too; and a pay that goes first makes the order paid before the checkout counts.
+    The order lock serializes two pays of one order: the second sees status = paid and
+    returns the same result.
     """
-    now = now or datetime.now(UTC)
-    order = orders_repository.lock_order(session, order_id)
+    # Unlocked read, only to find the event to lock and to answer 404 early.
+    order = orders_repository.get_order(session, order_id)
     if order is None or order.buyer_user_id != user.id:
         raise NotFoundError("Order not found")
+    event = orders_repository.lock_event(session, order.event_id)
+    order = orders_repository.lock_order(session, order_id)  # re-read under both locks
+    now = now or datetime.now(UTC)
 
     if order.status == OrderStatus.PAID:
         # Already paid (a retry, or a concurrent pay that won): create nothing.
         return _result(session, order, repository.get_succeeded_order_payment(session, order.id))
     if order.status != OrderStatus.PENDING:
         raise BusinessRuleError("Order cannot be paid")
+    # created_at is the DB's now() (start of the checkout transaction); `now` is the app clock.
     if now >= order.created_at + orders_repository.checkout_hold():
         order.status = OrderStatus.CANCELLED
         session.commit()  # keep the cancellation, then report it
         raise BusinessRuleError("Checkout expired, start again")
-    # Checked again at pay time: an admin may suspend paid sales (BE-22) after checkout.
-    event = order.event
+    # Same clock and locked event row as the expiry check above.
+    if now >= event.start_at:
+        raise BusinessRuleError("Event has already started")
+    # Checked again at pay time, on the locked row: an admin may suspend paid sales (BE-22)
+    # after checkout.
     if event.status != EventStatus.PUBLISHED or not event.paid_sales_active:
         raise BusinessRuleError("Paid ticket sales are not active for this event")
 
@@ -191,6 +230,13 @@ def pay_order(
         is_simulated=True,
     )
     repository.add_payment(session, payment)
+    _audit_payment(
+        session,
+        payment,
+        user,
+        order.event_id,
+        "payment.order_succeeded" if succeeded else "payment.order_failed",
+    )
 
     if succeeded:
         order.status = OrderStatus.PAID
@@ -205,7 +251,7 @@ def pay_order(
             ),
         )
     # A failed payment changes nothing else: the order stays pending and keeps its hold.
-    session.commit()  # one commit: payment, status, tickets and notification together
+    session.commit()  # one commit: payment, audit row, status, tickets and notification
     return _result(session, order, payment)
 
 

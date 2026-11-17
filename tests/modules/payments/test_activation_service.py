@@ -10,10 +10,11 @@ from sqlalchemy.orm import Session
 
 from app.common.errors import BusinessRuleError
 from app.core.config import get_settings
+from app.modules.audit.models import AuditLog
 from app.modules.events.enums import EventStatus
 from app.modules.events.models import Event
 from app.modules.identity.enums import PayoutAccountStatus, VerificationStatus
-from app.modules.identity.models import OrganizerProfile, PayoutAccount
+from app.modules.identity.models import OrganizerProfile, PayoutAccount, User
 from app.modules.payments import service
 from app.modules.payments.enums import PaymentPurpose, PaymentStatus
 from app.modules.payments.models import Payment
@@ -30,10 +31,19 @@ from tests.markers import postgres_only
 pytestmark = postgres_only
 
 Step = Callable[[Session, Event], ActivationChecklistOut]
+
+
+def _owner(session: Session, event: Event) -> User:
+    """The organizer's user: the one require_event_owner lets through."""
+    return session.get_one(User, event.organizer.user_id)
+
+
 STEPS: dict[str, Step] = {
     "simulate_verification": service.simulate_verification,
     "accept_terms": service.accept_terms,
-    "pay_activation": service.pay_activation,
+    "pay_activation": lambda session, event: service.pay_activation(
+        session, event, _owner(session, event)
+    ),
 }
 
 
@@ -174,8 +184,8 @@ def test_closed_event_is_rejected(
 
 
 def test_pay_twice_creates_one_simulated_payment(db_session: Session, event: Event) -> None:
-    service.pay_activation(db_session, event)
-    checklist = service.pay_activation(db_session, event)
+    service.pay_activation(db_session, event, _owner(db_session, event))
+    checklist = service.pay_activation(db_session, event, _owner(db_session, event))
 
     [payment] = _payments(db_session, event)
     assert payment.purpose == PaymentPurpose.ACTIVATION
@@ -242,3 +252,37 @@ def test_verification_applies_to_other_events_of_the_organizer(
     # Fee and terms stay per event.
     assert other_checklist.activation_fee_paid is False
     assert other_checklist.terms_accepted is False
+
+
+# --- audit ---
+
+
+def _audit_rows(session: Session, event: Event) -> list[AuditLog]:
+    return list(session.scalars(select(AuditLog).where(AuditLog.event_id == event.id)))
+
+
+def test_activation_payment_writes_one_audit_row(db_session: Session, event: Event) -> None:
+    owner = _owner(db_session, event)
+
+    service.pay_activation(db_session, event, owner)
+
+    [payment] = _payments(db_session, event)
+    [row] = _audit_rows(db_session, event)
+    assert (row.action_type, row.entity_type, row.entity_id) == (
+        "payment.activation_succeeded",
+        "payment",
+        payment.id,
+    )
+    assert (row.actor_user_id, row.event_id) == (owner.id, event.id)
+    assert row.details == {"amount_kzt": get_settings().activation_fee_kzt, "is_simulated": True}
+
+
+def test_repeated_activation_payment_writes_no_new_audit_row(
+    db_session: Session, event: Event
+) -> None:
+    owner = _owner(db_session, event)
+    service.pay_activation(db_session, event, owner)
+
+    service.pay_activation(db_session, event, owner)
+
+    assert len(_audit_rows(db_session, event)) == 1
