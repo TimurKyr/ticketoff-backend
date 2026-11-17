@@ -142,6 +142,38 @@ def test_database_rejects_invalid_payment(
         db_session.flush()
 
 
+def test_database_rejects_non_simulated_payment(db_session: Session) -> None:
+    event = create_event(db_session, create_organizer(db_session))
+    db_session.add(
+        Payment(
+            purpose=PaymentPurpose.ACTIVATION,
+            event_id=event.id,
+            amount_kzt=1000,
+            is_simulated=False,
+        )
+    )
+
+    with pytest.raises(IntegrityError, match="ck_payments_is_simulated"):
+        db_session.flush()
+
+
+def test_database_defaults_is_simulated_to_true(db_session: Session) -> None:
+    """Raw SQL without the column, so only the server default can fill it: the ORM and
+    Core inserts would both send the model's Python-side default instead."""
+    event = create_event(db_session, create_organizer(db_session))
+
+    is_simulated = db_session.scalar(
+        text(
+            "INSERT INTO payments (id, purpose, status, event_id, amount_kzt)"
+            " VALUES (:id, 'activation', 'succeeded', :event_id, 1000)"
+            " RETURNING is_simulated"
+        ),
+        {"id": uuid.uuid4(), "event_id": event.id},
+    )
+
+    assert is_simulated is True
+
+
 def test_order_can_redeem_only_one_promo_code(db_session: Session) -> None:
     event = create_event(db_session, create_organizer(db_session))
     campaign = PromotionalCampaign(
