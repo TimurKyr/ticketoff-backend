@@ -1,8 +1,8 @@
 # Deploy (production)
 
 The API runs on one VPS (Ubuntu 24.04) with Docker Compose: `db` (Postgres 16, volume `pgdata`),
-`api` (this image, runs `alembic upgrade head` on start) and `caddy` (HTTPS for `api.ticketoff.store`,
-certificates from Let's Encrypt). Only ports 22, 80 and 443 are open; Postgres and the API are not
+`api` (this image, runs `alembic upgrade head` on start) and `caddy` (HTTPS for `api.ticketoff.store`
+and the web app on `ticketoff.store`, certificates from Let's Encrypt). Only ports 22, 80 and 443 are open; Postgres and the API are not
 published to the host.
 
 Files: `docker-compose.prod.yml`, `deploy/Caddyfile`, `.env.prod.example`, `scripts/backup-db.sh`.
@@ -48,6 +48,23 @@ docker compose -f docker-compose.prod.yml up -d --build
 ```
 
 Migrations run automatically when the `api` container starts.
+
+## Web app
+
+Caddy serves the static build of `ticketoff-web` from `/opt/ticketoff/web` (mounted read-only at
+`/srv/web`) on `ticketoff.store`; `www.ticketoff.store` redirects there. Unknown paths fall back to
+`index.html` (SPA routing). The web app is built on a developer machine or in CI, not on the server
+(1 GB RAM), and uploaded with `scripts/deploy.sh` from the `ticketoff-web` repo:
+
+```bash
+# in ticketoff-web
+npm ci && npm run build
+rsync -az --delete --delay-updates dist/ ubuntu@<server>:/opt/ticketoff/web/
+```
+
+A new upload needs no restart. After changing `deploy/Caddyfile`:
+`docker compose -f docker-compose.prod.yml up -d caddy` (recreated if the mount changed) or
+`docker compose -f docker-compose.prod.yml exec caddy caddy reload --config /etc/caddy/Caddyfile`.
 
 ## Backups
 

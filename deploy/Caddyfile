@@ -1,6 +1,26 @@
-# Caddy gets and renews the Let's Encrypt certificate for API_DOMAIN automatically.
-# The DNS A record must point to this server, ports 80 and 443 open.
+# Caddy gets and renews the Let's Encrypt certificates automatically.
+# The DNS records must point to this server, ports 80 and 443 open.
 {$API_DOMAIN} {
 	encode zstd gzip
 	reverse_proxy api:8000
+}
+
+# Web app (ticketoff-web): static build copied to ./web on the host.
+{$WEB_DOMAIN} {
+	root * /srv/web
+	encode zstd gzip
+
+	# Hashed build files never change; index.html must be re-read on every deploy.
+	@assets path /assets/*
+	header @assets Cache-Control "public, max-age=31536000, immutable"
+	@notassets not path /assets/*
+	header @notassets Cache-Control "no-cache"
+
+	# SPA: unknown paths (/login, /events/123) get index.html, React Router handles them.
+	try_files {path} /index.html
+	file_server
+}
+
+www.{$WEB_DOMAIN} {
+	redir https://{$WEB_DOMAIN}{uri} permanent
 }

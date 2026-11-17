@@ -1,4 +1,4 @@
-# Production stack: Postgres + API + Caddy (automatic HTTPS).
+# Production stack: Postgres + API + Caddy (automatic HTTPS, also serves the web app).
 # Usage on the server: docker compose -f docker-compose.prod.yml up -d --build
 # Secrets live only in .env on the server (see .env.prod.example).
 services:
@@ -40,12 +40,15 @@ services:
     restart: unless-stopped
     environment:
       API_DOMAIN: ${API_DOMAIN:-api.ticketoff.store}
+      WEB_DOMAIN: ${WEB_DOMAIN:-ticketoff.store}
     ports:
       - "80:80"
       - "443:443"
       - "443:443/udp"
     volumes:
       - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      # Built web app (ticketoff-web `dist/`), uploaded by its deploy script.
+      - ./web:/srv/web:ro
       - caddy_data:/data
       - caddy_config:/config
     depends_on:
