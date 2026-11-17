@@ -3,7 +3,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 
 from app.common.errors import BusinessRuleError, NotFoundError, PermissionDeniedError
 from app.modules.events.dependencies import require_event_owner
@@ -130,3 +130,30 @@ def get_my_order(order_id: uuid.UUID, user: CurrentUser, session: SessionDep) ->
 def get_my_ticket(ticket_id: uuid.UUID, user: CurrentUser, session: SessionDep) -> TicketOut:
     with _http_errors():
         return service.get_my_ticket(session, user, ticket_id)
+
+
+@tickets_router.get(
+    "/{ticket_id}/pdf",
+    response_class=Response,
+    responses={
+        200: {
+            "description": "Printable A4 ticket with the entry QR code",
+            "content": {"application/pdf": {"schema": {"type": "string", "format": "binary"}}},
+        },
+        404: {"description": "Ticket not found (or not mine)"},
+        409: {"description": "Ticket is no longer valid, or the event was cancelled"},
+    },
+    summary="One of my tickets as a printable PDF",
+)
+def get_my_ticket_pdf(ticket_id: uuid.UUID, user: CurrentUser, session: SessionDep) -> Response:
+    with _http_errors():
+        content, filename = service.get_my_ticket_pdf(session, user, ticket_id)
+    return Response(
+        content=content,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            # The QR is an entry credential: browsers and proxies must not keep a copy.
+            "Cache-Control": "no-store",
+        },
+    )
