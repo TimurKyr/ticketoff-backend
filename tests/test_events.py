@@ -18,7 +18,7 @@ from app.modules.events.models import Event, Venue
 from app.modules.identity.models import OrganizerProfile, User
 from app.modules.identity.security import create_access_token, hash_password
 from app.modules.orders.enums import OrderStatus
-from app.modules.orders.models import Order
+from app.modules.orders.models import Order, OrderItem
 
 Headers = dict[str, str]
 UserFactory = Callable[..., tuple[User, Headers]]
@@ -95,7 +95,16 @@ def _create(client: TestClient, headers: Headers, venue: Venue, **overrides: obj
     return response.json()
 
 
+def _add_type(client: TestClient, headers: Headers, event_id: str, **overrides: object) -> dict:
+    body = {"name": "Standard", "quantity_total": 10, **overrides}
+    response = client.post(f"/events/{event_id}/ticket-types", json=body, headers=headers)
+    assert response.status_code == 201, response.text
+    return response.json()
+
+
 def _publish(client: TestClient, headers: Headers, event_id: str) -> dict:
+    """Publish with one visible ticket type (publish requires it)."""
+    _add_type(client, headers, event_id)
     response = client.post(f"/events/{event_id}/publish", headers=headers)
     assert response.status_code == 200, response.text
     return response.json()
@@ -245,8 +254,25 @@ def test_cannot_publish_an_event_that_already_ended(
     event = _create(
         client, org, venue, start_at=_iso(-3), end_at=_iso(-2), registration_closes_at=None
     )
+    _add_type(client, org, event["id"])
 
     assert client.post(f"/events/{event['id']}/publish", headers=org).status_code == 409
+
+
+def test_publish_requires_a_visible_ticket_type(
+    client: TestClient, org: Headers, venue: Venue
+) -> None:
+    event = _create(client, org, venue)
+    url = f"/events/{event['id']}/publish"
+
+    assert client.post(url, headers=org).status_code == 409
+    _add_type(client, org, event["id"], name="Staff only", is_hidden=True)
+    assert client.post(url, headers=org).status_code == 409
+
+    _add_type(client, org, event["id"])
+    response = client.post(url, headers=org)
+    assert response.status_code == 200
+    assert response.json()["status"] == "published"
 
 
 # --- public list & page ---------------------------------------------------------------------
@@ -303,6 +329,8 @@ def test_public_list_hides_past_events_unless_asked(
     db.commit()
 
     assert _titles(client, tag) == []
+    # from_date only narrows the list, it does not switch the "hide past" filter off.
+    assert _titles(client, tag, from_date="2000-01-01T00:00:00Z") == []
     assert _titles(client, tag, include_past=True) == [f"Old {tag}"]
 
 
@@ -346,6 +374,86 @@ def test_duplicate_copies_configuration_into_a_new_draft(
         original["venue_id"],
         original["capacity"],
     )
+
+
+def test_duplicate_copies_ticket_types_without_sales(
+    client: TestClient, org: Headers, db: Session, make_user: UserFactory, venue: Venue
+) -> None:
+    original = _create(client, org, venue)
+    sales_end = _iso(5)
+    vip = _add_type(
+        client,
+        org,
+        original["id"],
+        name="VIP",
+        quantity_total=5,
+        max_per_order=2,
+        sales_end_at=sales_end,
+    )
+    _add_type(client, org, original["id"], name="Crew", quantity_total=3, is_hidden=True)
+    _add_order(db, make_user()[0], original["id"], OrderStatus.FREE_CONFIRMED)
+    order = db.query(Order).filter(Order.event_id == uuid.UUID(original["id"])).one()
+    db.add(
+        OrderItem(
+            order_id=order.id, ticket_type_id=uuid.UUID(vip["id"]), quantity=2, unit_price_kzt=0
+        )
+    )
+    db.commit()
+
+    copy = client.post(f"/events/{original['id']}/duplicate", headers=org).json()
+    types = client.get(f"/events/{copy['id']}/ticket-types", headers=org).json()
+
+    by_name = {t["name"]: t for t in types}
+    assert set(by_name) == {"VIP", "Crew"}
+    assert by_name["VIP"]["id"] != vip["id"]
+    assert (by_name["VIP"]["quantity_total"], by_name["VIP"]["max_per_order"]) == (5, 2)
+    assert datetime.fromisoformat(by_name["VIP"]["sales_end_at"]) == datetime.fromisoformat(
+        sales_end
+    )
+    assert (by_name["VIP"]["sold"], by_name["VIP"]["available"]) == (0, 5)
+    assert by_name["Crew"]["is_hidden"] is True
+    # The copy can be published right away: it has a visible ticket type.
+    assert client.post(f"/events/{copy['id']}/publish", headers=org).status_code == 200
+
+
+# --- capacity -------------------------------------------------------------------------------
+
+
+def test_capacity_cannot_drop_below_ticket_types(
+    client: TestClient, org: Headers, venue: Venue
+) -> None:
+    event = _create(client, org, venue, capacity=100)
+    _add_type(client, org, event["id"], quantity_total=60)
+    url = f"/events/{event['id']}"
+
+    assert client.patch(url, json={"capacity": 59}, headers=org).status_code == 409
+    assert client.patch(url, json={"capacity": 60}, headers=org).json()["capacity"] == 60
+    assert client.patch(url, json={"capacity": None}, headers=org).status_code == 200
+
+
+def test_capacity_cannot_drop_below_tickets_sold(
+    client: TestClient, org: Headers, db: Session, make_user: UserFactory, venue: Venue
+) -> None:
+    """Old rows may hold more than the types allow; sold tickets still bound capacity."""
+    event = _create(client, org, venue, capacity=100)
+    ticket_type = _add_type(client, org, event["id"], quantity_total=10)
+    _add_order(db, make_user()[0], event["id"], OrderStatus.PAID)
+    order = db.query(Order).filter(Order.event_id == uuid.UUID(event["id"])).one()
+    db.add(
+        OrderItem(
+            order_id=order.id,
+            ticket_type_id=uuid.UUID(ticket_type["id"]),
+            quantity=30,
+            unit_price_kzt=0,
+        )
+    )
+    db.commit()
+    url = f"/events/{event['id']}"
+
+    response = client.patch(url, json={"capacity": 20}, headers=org)
+    assert response.status_code == 409
+    assert "sold" in response.json()["detail"]
+    assert client.patch(url, json={"capacity": 30}, headers=org).status_code == 200
 
 
 # --- organizer dashboard ----------------------------------------------------------------------

@@ -75,7 +75,8 @@ def list_public(
         stmt = stmt.where(Event.start_at >= from_date)
     if to_date:
         stmt = stmt.where(Event.start_at <= to_date)
-    if not include_past and not from_date:
+    # from_date narrows the list further; it never brings back events that already ended.
+    if not include_past:
         stmt = stmt.where(func.coalesce(Event.end_at, Event.start_at) >= now)
     return _page(session, stmt.order_by(Event.start_at.asc(), Event.id.asc()), limit, offset)
 
