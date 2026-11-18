@@ -81,10 +81,11 @@ def update_ticket_type(
     ticket_type_id: uuid.UUID,
     payload: TicketTypeUpdate,
     event: OwnedEventDep,
+    user: CurrentUser,
     session: SessionDep,
 ) -> TicketTypeOut:
     return service.update_ticket_type(
-        session, event.organizer_id, event.id, ticket_type_id, payload
+        session, event.organizer_id, event.id, ticket_type_id, payload, actor_user_id=user.id
     )
 
 

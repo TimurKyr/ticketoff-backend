@@ -76,8 +76,10 @@ def get_event(event_id: uuid.UUID, session: SessionDep) -> Event:
 
 
 @events_router.patch("/{event_id}", response_model=EventOut, summary="Edit an event")
-def update_event(payload: EventUpdate, event: OwnedEventDep, session: SessionDep) -> Event:
-    return service.update_event(session, event, payload)
+def update_event(
+    payload: EventUpdate, event: OwnedEventDep, user: CurrentUser, session: SessionDep
+) -> Event:
+    return service.update_event(session, event, payload, user)
 
 
 @events_router.post(
@@ -91,13 +93,13 @@ def duplicate_event(event: OwnedEventDep, session: SessionDep) -> Event:
 
 
 @events_router.post("/{event_id}/publish", response_model=EventOut, summary="Publish a draft")
-def publish_event(event: OwnedEventDep, session: SessionDep) -> Event:
-    return service.publish_event(session, event)
+def publish_event(event: OwnedEventDep, user: CurrentUser, session: SessionDep) -> Event:
+    return service.publish_event(session, event, user)
 
 
 @events_router.post("/{event_id}/unpublish", response_model=EventOut, summary="Back to draft")
-def unpublish_event(event: OwnedEventDep, session: SessionDep) -> Event:
-    return service.unpublish_event(session, event)
+def unpublish_event(event: OwnedEventDep, user: CurrentUser, session: SessionDep) -> Event:
+    return service.unpublish_event(session, event, user)
 
 
 @events_router.post(

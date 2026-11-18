@@ -4,11 +4,12 @@ from datetime import UTC, datetime
 from sqlalchemy.orm import Session
 
 from app.common.errors import BusinessRuleError, InvalidInputError, NotFoundError
+from app.modules.audit import service as audit
 from app.modules.events import repository
 from app.modules.events.enums import EventStatus, EventVisibility
 from app.modules.events.models import Event, Venue
 from app.modules.events.schemas import EventBucket, EventCreate, EventUpdate, check_dates
-from app.modules.identity.models import OrganizerProfile
+from app.modules.identity.models import OrganizerProfile, User
 from app.modules.orders import repository as orders_repository
 from app.modules.orders.models import TicketType
 
@@ -65,6 +66,17 @@ def _check_capacity(session: Session, event: Event, capacity: int | None) -> Non
         raise BusinessRuleError(f"Capacity ({capacity}) is below tickets already sold ({held})")
 
 
+def _audit_status(session: Session, event: Event, user: User, action_type: str) -> None:
+    audit.log(
+        session,
+        actor_user_id=user.id,
+        action_type=action_type,
+        entity_type="event",
+        entity_id=event.id,
+        event_id=event.id,
+    )
+
+
 def _require_not_ended(start_at: datetime, end_at: datetime | None, message: str) -> None:
     if _as_aware(end_at or start_at) < _now():
         raise BusinessRuleError(message)
@@ -78,7 +90,7 @@ def create_event(session: Session, organizer: OrganizerProfile, payload: EventCr
     return event
 
 
-def update_event(session: Session, event: Event, payload: EventUpdate) -> Event:
+def update_event(session: Session, event: Event, payload: EventUpdate, user: User) -> Event:
     _lock(session, event)
     _require_open(event)
     changes = payload.model_dump(exclude_unset=True)
@@ -109,9 +121,20 @@ def update_event(session: Session, event: Event, payload: EventUpdate) -> Event:
             merged["start_at"], merged["end_at"], "A published event cannot be moved into the past"
         )
 
+    old_capacity = event.capacity
     for name, value in changes.items():
         setattr(event, name, value)
-    session.commit()
+    if "capacity" in changes and changes["capacity"] != old_capacity:
+        audit.log(
+            session,
+            actor_user_id=user.id,
+            action_type="event.capacity_changed",
+            entity_type="event",
+            entity_id=event.id,
+            event_id=event.id,
+            details={"old": old_capacity, "new": changes["capacity"]},  # None = no limit
+        )
+    session.commit()  # the change and its audit row together
     return event
 
 
@@ -157,7 +180,7 @@ def duplicate_event(session: Session, event: Event) -> Event:
     return copy
 
 
-def publish_event(session: Session, event: Event) -> Event:
+def publish_event(session: Session, event: Event, user: User) -> Event:
     _lock(session, event)
     if event.status != EventStatus.DRAFT:
         raise BusinessRuleError("Only a draft event can be published")
@@ -167,11 +190,12 @@ def publish_event(session: Session, event: Event) -> Event:
     if not orders_repository.list_by_event(session, event.id, include_hidden=False):
         raise BusinessRuleError("Add at least one visible ticket type before publishing")
     event.status = EventStatus.PUBLISHED
-    session.commit()  # TODO(BE-19): write an audit-log entry.
+    _audit_status(session, event, user, "event.published")
+    session.commit()  # the status and its audit row together
     return event
 
 
-def unpublish_event(session: Session, event: Event) -> Event:
+def unpublish_event(session: Session, event: Event, user: User) -> Event:
     _lock(session, event)
     if event.status != EventStatus.PUBLISHED:
         raise BusinessRuleError("Only a published event can be unpublished")
@@ -179,7 +203,8 @@ def unpublish_event(session: Session, event: Event) -> Event:
         # Ticket holders would lose the event page and the organizer could edit it as a draft.
         raise BusinessRuleError("An event with orders cannot be unpublished; cancel it instead")
     event.status = EventStatus.DRAFT
-    session.commit()  # TODO(BE-19): write an audit-log entry.
+    _audit_status(session, event, user, "event.unpublished")
+    session.commit()  # the status and its audit row together
     return event
 
 

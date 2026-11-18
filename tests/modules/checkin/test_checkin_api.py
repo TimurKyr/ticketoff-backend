@@ -336,7 +336,11 @@ def test_undo_reverses_check_in_and_is_audited(client: TestClient, door: Door, d
     assert response.json()["status"] == "valid"
     record = db.scalar(select(CheckInRecord).where(CheckInRecord.ticket_id == ticket.id))
     assert record.is_reversed is True
-    audit = db.scalar(select(AuditLog).where(AuditLog.entity_id == ticket.id))
+    audit = db.scalar(
+        select(AuditLog).where(
+            AuditLog.entity_id == ticket.id, AuditLog.action_type == "ticket.check_in_reversed"
+        )
+    )
     assert audit.action_type == "ticket.check_in_reversed"
     assert audit.event_id == door.event.id
 

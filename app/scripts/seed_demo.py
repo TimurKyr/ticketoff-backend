@@ -493,7 +493,7 @@ def run(session: Session, *, password: str | None, reset_scans: bool = False) ->
         # Types before publishing: publish requires a visible ticket type (FX-4).
         types_by_event[spec.key] = _ensure_ticket_types(session, result, organizer, event, spec)
         if event.status == EventStatus.DRAFT:
-            events_service.publish_event(session, event)
+            events_service.publish_event(session, event, organizer_user)
             result.created.append(f"published {spec.title}")
         if spec.has_paid:
             _activate_paid_sales(session, result, event, organizer_user)
