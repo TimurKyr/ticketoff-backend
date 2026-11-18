@@ -21,6 +21,9 @@ class Settings(BaseSettings):
     environment: str = "local"
     # Comma-separated browser origins allowed to call the API (the web app).
     cors_origins: str = "http://localhost:5173"
+    # Public address of the web app. A campaign QR encodes a link on it, so a phone camera
+    # opens the event page with the promo code (BE-16).
+    frontend_url: str = "https://ticketoff.store"
     # Simulated payments (BE-14). The fee must be positive: ck_payments_amount_positive.
     activation_fee_kzt: int = Field(default=5000, ge=1)
     processing_fee_percent: int = Field(default=3, ge=0, le=100)

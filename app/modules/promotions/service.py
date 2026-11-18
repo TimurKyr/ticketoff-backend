@@ -9,9 +9,12 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.common.errors import BusinessRuleError, NotFoundError
+from app.core.config import get_settings
+from app.modules.audit import service as audit
 from app.modules.events import service as events_service
 from app.modules.events.enums import EventStatus
 from app.modules.events.models import Event
+from app.modules.identity.models import User
 from app.modules.orders.models import Order
 from app.modules.promotions import repository
 from app.modules.promotions.enums import DiscountType, PromoCodeStatus
@@ -57,11 +60,26 @@ def _ensure_event_open(event: Event) -> None:
         raise BusinessRuleError("Promo campaigns and codes are closed for this event")
 
 
-def create_campaign(session: Session, event: Event, data: CampaignCreate) -> CampaignOut:
+def create_campaign(
+    session: Session, user: User, event: Event, data: CampaignCreate
+) -> CampaignOut:
     _ensure_event_open(event)
     campaign = PromotionalCampaign(event_id=event.id, **data.model_dump())
     repository.add(session, campaign)
-    session.commit()
+    audit.log(
+        session,
+        actor_user_id=user.id,
+        action_type="promo.campaign_created",
+        entity_type="promo_campaign",
+        entity_id=campaign.id,
+        event_id=event.id,
+        details={
+            "name": campaign.name,
+            "discount_type": campaign.discount_type.value,
+            "discount_value": campaign.discount_value,
+        },
+    )
+    session.commit()  # the campaign and its audit row together
     return CampaignOut.model_validate(campaign)
 
 
@@ -120,6 +138,7 @@ def _code_out(
 
 def create_code(
     session: Session,
+    user: User,
     event: Event,
     campaign_id: uuid.UUID,
     data: CodeCreate,
@@ -136,7 +155,16 @@ def create_code(
     )
     try:
         repository.add(session, code)
-        session.commit()
+        audit.log(
+            session,
+            actor_user_id=user.id,
+            action_type="promo.code_created",
+            entity_type="promo_code",
+            entity_id=code.id,
+            event_id=event.id,
+            details={"campaign_id": str(campaign.id), "code": code.code},
+        )
+        session.commit()  # the code and its audit row together
     except IntegrityError as exc:
         session.rollback()
         raise BusinessRuleError("This promo code is not available, choose another") from exc
@@ -159,6 +187,7 @@ def list_codes(
 
 def update_code(
     session: Session,
+    user: User,
     event: Event,
     campaign_id: uuid.UUID,
     code_id: uuid.UUID,
@@ -172,10 +201,35 @@ def update_code(
     code = repository.get_code(session, campaign.id, code_id)
     if code is None:
         raise NotFoundError("Promo code not found")
-    code.status = PromoCodeStatus(data.status)
-    session.commit()
+    new_status = PromoCodeStatus(data.status)
+    if code.status != new_status:  # switching to the status it already has changes nothing
+        code.status = new_status
+        audit.log(
+            session,
+            actor_user_id=user.id,
+            action_type=(
+                "promo.code_disabled"
+                if new_status == PromoCodeStatus.DISABLED
+                else "promo.code_enabled"
+            ),
+            entity_type="promo_code",
+            entity_id=code.id,
+            event_id=event.id,
+            details={"campaign_id": str(campaign.id), "code": code.code},
+        )
+    session.commit()  # the change and its audit row together
     per_code = repository.code_redemptions(session, campaign.id, now)
     return _code_out(code, campaign, per_code.get(code.id, 0), sum(per_code.values()), now)
+
+
+def campaign_qr_link(event_id: uuid.UUID, qr_token: str) -> str:
+    """What the campaign QR encodes: a link, so a phone camera opens the event page.
+
+    The web app reads `?promo=` and calls GET /promo-qr/{qr_token} to pre-fill the code.
+    The token is still opaque and random; the link carries no discount.
+    """
+    base = get_settings().frontend_url.rstrip("/")
+    return f"{base}/events/{event_id}?promo={qr_token}"
 
 
 def code_qr_png(
@@ -185,7 +239,7 @@ def code_qr_png(
     code = repository.get_code(session, campaign.id, code_id)
     if code is None:
         raise NotFoundError("Promo code not found")
-    return render_qr_png(code.qr_token)
+    return render_qr_png(campaign_qr_link(event.id, code.qr_token))
 
 
 # --- buyer: check a code, scan a campaign QR ------------------------------------------------

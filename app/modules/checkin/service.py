@@ -160,7 +160,8 @@ def scan(session: Session, user: User, event_id: uuid.UUID, qr_token: str) -> Sc
         return _out(session, event.id, ScanResult.INVALID)
     token = qr_token.strip()
 
-    if token.startswith(CAMPAIGN_PREFIX):
+    # A campaign QR encodes a link ("...?promo=pc1.xxx"); the bare token is the older form.
+    if token.startswith(CAMPAIGN_PREFIX) or f"promo={CAMPAIGN_PREFIX}" in token:
         return _out(session, event.id, ScanResult.CAMPAIGN_QR_REJECTED)
     if not token.startswith(TICKET_PREFIX):
         return _out(session, event.id, ScanResult.INVALID)

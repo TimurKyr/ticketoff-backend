@@ -32,9 +32,9 @@ OwnedEventDep = Annotated[Event, Depends(require_event_owner)]
     summary="Create a promo campaign for my event",
 )
 def create_campaign(
-    payload: CampaignCreate, event: OwnedEventDep, session: SessionDep
+    payload: CampaignCreate, event: OwnedEventDep, user: CurrentUser, session: SessionDep
 ) -> CampaignOut:
-    return service.create_campaign(session, event, payload)
+    return service.create_campaign(session, user, event, payload)
 
 
 @campaigns_router.get("", response_model=list[CampaignOut], summary="Campaigns of my event")
@@ -49,9 +49,13 @@ def list_campaigns(event: OwnedEventDep, session: SessionDep) -> list[CampaignOu
     summary="Add a promo code (made up if you do not send one) with its campaign QR token",
 )
 def create_code(
-    campaign_id: uuid.UUID, payload: CodeCreate, event: OwnedEventDep, session: SessionDep
+    campaign_id: uuid.UUID,
+    payload: CodeCreate,
+    event: OwnedEventDep,
+    user: CurrentUser,
+    session: SessionDep,
 ) -> CodeOut:
-    return service.create_code(session, event, campaign_id, payload)
+    return service.create_code(session, user, event, campaign_id, payload)
 
 
 @campaigns_router.get(
@@ -73,9 +77,10 @@ def update_code(
     code_id: uuid.UUID,
     payload: CodeUpdate,
     event: OwnedEventDep,
+    user: CurrentUser,
     session: SessionDep,
 ) -> CodeOut:
-    return service.update_code(session, event, campaign_id, code_id, payload)
+    return service.update_code(session, user, event, campaign_id, code_id, payload)
 
 
 @campaigns_router.get(

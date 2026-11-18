@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
+from app.core.config import get_settings
 from app.core.db import get_session
 from app.main import app
 from app.modules.events.enums import EventStatus
@@ -453,7 +454,9 @@ def test_code_list_shows_uses_and_exhausted_status(
 # --- campaign QR ----------------------------------------------------------------------------
 
 
-def test_qr_png_encodes_the_token(api: TestClient, owner: Organizer, event: Event) -> None:
+def test_qr_png_encodes_a_link_to_the_event_with_the_token(
+    api: TestClient, owner: Organizer, event: Event
+) -> None:
     campaign = new_campaign(api, owner, event)
     code = new_code(api, owner, event, campaign)
 
@@ -465,7 +468,11 @@ def test_qr_png_encodes_the_token(api: TestClient, owner: Organizer, event: Even
     assert response.status_code == 200
     assert response.headers["content-type"] == "image/png"
     image = cv2.imdecode(np.frombuffer(response.content, np.uint8), cv2.IMREAD_COLOR)
-    assert cv2.QRCodeDetector().detectAndDecode(image)[0] == code["qr_token"]
+    # A phone camera must open something: a link to the event page, carrying the token.
+    expected = (
+        f"{get_settings().frontend_url.rstrip('/')}/events/{event.id}?promo={code['qr_token']}"
+    )
+    assert cv2.QRCodeDetector().detectAndDecode(image)[0] == expected
 
 
 def test_qr_png_of_another_organizers_event_is_404(
@@ -494,12 +501,20 @@ def test_scanned_campaign_qr_leads_to_the_event_without_login(
     assert api.get("/promo-qr/pc1.unknown").status_code == 404
 
 
-def test_the_door_rejects_a_campaign_qr(api: TestClient, owner: Organizer, event: Event) -> None:
+@pytest.mark.parametrize("form", ["token", "link"])
+def test_the_door_rejects_a_campaign_qr(
+    api: TestClient, owner: Organizer, event: Event, form: str
+) -> None:
     code = new_code(api, owner, event, new_campaign(api, owner, event))
+    scanned = (
+        code["qr_token"]
+        if form == "token"
+        else f"https://ticketoff.store/events/{event.id}?promo={code['qr_token']}"
+    )
 
     response = api.post(
         "/checkin/scan",
-        json={"event_id": str(event.id), "qr_token": code["qr_token"]},
+        json={"event_id": str(event.id), "qr_token": scanned},
         headers=owner.headers,
     )
 
@@ -648,3 +663,56 @@ def test_a_taken_code_does_not_say_whose_it_is(
 
     assert response.status_code == 409
     assert response.json() == {"detail": "This promo code is not available, choose another"}
+
+
+# --- audit (BE-19 timeline) -----------------------------------------------------------------
+
+
+def test_promo_actions_show_up_in_the_event_timeline(
+    api: TestClient, owner: Organizer, event: Event
+) -> None:
+    campaign = new_campaign(api, owner, event)
+    code = new_code(api, owner, event, campaign, "SPRING20")
+    url = f"/events/{event.id}/campaigns/{campaign['id']}/codes/{code['id']}"
+    api.patch(url, json={"status": "disabled"}, headers=owner.headers)
+    api.patch(url, json={"status": "disabled"}, headers=owner.headers)  # no change, no row
+    api.patch(url, json={"status": "active"}, headers=owner.headers)
+
+    page = api.get(
+        f"/events/{event.id}/timeline", params={"action_type": "promo."}, headers=owner.headers
+    ).json()
+
+    # Not compared in order: the test session is one transaction, so every row has the same
+    # created_at and "oldest first" has nothing to sort by here.
+    by_action = {item["action_type"]: item for item in page["items"]}
+    assert page["total"] == 4  # the repeated "disabled" wrote nothing
+    assert sorted(by_action) == [
+        "promo.campaign_created",
+        "promo.code_created",
+        "promo.code_disabled",
+        "promo.code_enabled",
+    ]
+    created = by_action["promo.code_created"]
+    assert created["entity_id"] == code["id"]
+    assert created["details"] == {"campaign_id": campaign["id"], "code": "SPRING20"}
+    assert created["actor_user_id"] is not None
+
+
+def test_a_failed_duplicate_code_leaves_no_audit_row(
+    api: TestClient, owner: Organizer, event: Event
+) -> None:
+    campaign = new_campaign(api, owner, event)
+    new_code(api, owner, event, campaign, "SPRING20")
+    api.post(
+        f"/events/{event.id}/campaigns/{campaign['id']}/codes",
+        json={"code": "SPRING20"},
+        headers=owner.headers,
+    )
+
+    page = api.get(
+        f"/events/{event.id}/timeline",
+        params={"action_type": "promo.code_created"},
+        headers=owner.headers,
+    ).json()
+
+    assert page["total"] == 1
