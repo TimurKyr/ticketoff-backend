@@ -16,6 +16,8 @@ from app.modules.events.enums import EventStatus, EventVisibility, SeatingType
 
 # Buyers read it before paying; long enough for a real policy, short enough for a card.
 REFUND_POLICY_MAX_LENGTH = 2000
+# Integer column is 32-bit; the web form uses the same cap.
+CAPACITY_MAX = 1_000_000
 
 
 class EventBucket(enum.StrEnum):
@@ -54,7 +56,7 @@ class EventCreate(BaseModel):
     venue_id: uuid.UUID
     start_at: AwareDatetime
     end_at: AwareDatetime | None = None
-    capacity: int | None = Field(default=None, ge=1)
+    capacity: int | None = Field(default=None, ge=1, le=CAPACITY_MAX)
     visibility: EventVisibility = EventVisibility.PUBLIC
     seating_type: SeatingType = SeatingType.GENERAL
     registration_opens_at: AwareDatetime | None = None
@@ -78,7 +80,7 @@ class EventUpdate(BaseModel):
     venue_id: uuid.UUID | None = None
     start_at: AwareDatetime | None = None
     end_at: AwareDatetime | None = None
-    capacity: int | None = Field(default=None, ge=1)
+    capacity: int | None = Field(default=None, ge=1, le=CAPACITY_MAX)
     visibility: EventVisibility | None = None
     seating_type: SeatingType | None = None
     registration_opens_at: AwareDatetime | None = None
