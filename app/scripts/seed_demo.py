@@ -7,18 +7,19 @@ On the server:
     docker compose -f docker-compose.prod.yml exec api python -m app.scripts.seed_demo
 
 Idempotent: every row is looked up by a natural key (user email, venue name, event title
-of the demo organizer, ticket type name within its event, attendee name within the demo
-buyer's orders of an event) and created only if missing. Running it again changes nothing,
-except with --reset-scans or a DEMO_PASSWORD that differs from the stored one.
+of the demo organizer, ticket type name within its event, promo code, attendee name within
+the demo buyer's orders of an event) and created only if missing. Running it again changes
+nothing, except with --reset-scans or a DEMO_PASSWORD that differs from the stored one.
+Demo events found under an earlier title (without the "Demo: " prefix) are renamed.
 
-Events, ticket types, activation, staff and tickets go through the same services as the
-API, so the tickets carry real tk1. tokens signed with this server's TICKET_SIGNING_SECRET.
-There is no cancel or refund service yet, so the cancelled and refunded demo tickets are
-set directly (with a simulated Refund row for the refunded one).
+Everything goes through the same services as the API, so the tickets carry real tk1.
+tokens signed with this server's TICKET_SIGNING_SECRET, and cancel / refund / check-in leave
+the same audit rows as in the app. A ticket whose status differs from the wanted one (a run
+interrupted after issuing it) is moved there on the next run, where the app allows it.
 
 Passwords: DEMO_PASSWORD, if set, is the password of every demo account (and resets it on
-existing accounts). Without it, newly created accounts get one random password, printed
-once; existing accounts keep theirs.
+existing accounts); it is never printed. Without it, newly created accounts get one random
+password, printed once; existing accounts keep theirs.
 """
 
 import argparse
@@ -41,7 +42,7 @@ from app.modules.checkin.schemas import ScanResult
 from app.modules.events import service as events_service
 from app.modules.events.enums import EventStatus
 from app.modules.events.models import Event, Venue
-from app.modules.events.schemas import EventCreate
+from app.modules.events.schemas import EventCreate, EventUpdate
 from app.modules.identity.models import OrganizerProfile, StaffAssignment, User
 from app.modules.identity.security import hash_password, verify_password
 from app.modules.identity.service import normalize_email
@@ -55,11 +56,12 @@ from app.modules.orders.schemas import (
     RegistrationItemIn,
     TicketTypeCreate,
 )
-from app.modules.payments import repository as payments_repository
 from app.modules.payments import service as payments_service
-from app.modules.payments.enums import RefundStatus
-from app.modules.payments.models import Refund
-from app.modules.payments.schemas import PayOrderIn
+from app.modules.payments.schemas import PayOrderIn, RefundIn
+from app.modules.promotions import service as promotions_service
+from app.modules.promotions.enums import DiscountType
+from app.modules.promotions.models import PromoCode, PromotionalCampaign
+from app.modules.promotions.schemas import CampaignCreate, CodeCreate
 
 TZ_NAME = "Asia/Almaty"
 TZ = ZoneInfo(TZ_NAME)
@@ -101,6 +103,8 @@ class EventSpec:
     hour: int  # local start time
     hours: int  # duration
     types: tuple[TypeSpec, ...]
+    # Titles this event had in earlier seeds: an event found by one of them is renamed.
+    old_titles: tuple[str, ...] = ()
 
     @property
     def has_paid(self) -> bool:
@@ -114,6 +118,15 @@ class TicketSpec:
     ticket_type: str
     attendee: str
     status: TicketStatus  # status right after the seed creates it
+    promo_code: str | None = None
+
+
+@dataclass(frozen=True)
+class PromoSpec:
+    event: str  # EventSpec.key
+    campaign: str
+    percent: int
+    code: str
 
 
 VENUES = (
@@ -126,7 +139,8 @@ VENUES = (
 EVENTS = (
     EventSpec(
         key="free",
-        title="Открытая лекция: IT-карьера в Казахстане",
+        title="Demo: Открытая лекция: IT-карьера в Казахстане",
+        old_titles=("Открытая лекция: IT-карьера в Казахстане",),
         description="Бесплатная лекция и нетворкинг. Демо-событие ticketoff.",
         category="education",
         venue="Дворец Республики",
@@ -137,7 +151,8 @@ EVENTS = (
     ),
     EventSpec(
         key="paid",
-        title="Kazakh Symphony Night",
+        title="Demo: Kazakh Symphony Night",
+        old_titles=("Kazakh Symphony Night",),
         description="Вечер симфонической музыки. Демо-событие ticketoff, оплата симулируется.",
         category="music",
         venue="Astana Arena",
@@ -148,7 +163,8 @@ EVENTS = (
     ),
     EventSpec(
         key="multi",
-        title="Almaty Jazz Weekend",
+        title="Demo: Almaty Jazz Weekend",
+        old_titles=("Almaty Jazz Weekend",),
         description="Джазовый фестиваль: несколько типов билетов. Демо-событие ticketoff.",
         category="music",
         venue="Almaty Arena",
@@ -175,9 +191,19 @@ TICKETS = (
     TicketSpec(
         "paid-refunded", "paid", "Стандарт", "Демо Покупатель Возврат", TicketStatus.REFUNDED
     ),
+    TicketSpec(
+        "paid-promo",
+        "paid",
+        "Стандарт",
+        "Демо Покупатель Промо",
+        TicketStatus.VALID,
+        promo_code="DEMO20",
+    ),
     TicketSpec("multi-vip", "multi", "VIP", "Демо VIP", TicketStatus.VALID),
     TicketSpec("multi-standard", "multi", "Стандарт", "Демо Стандарт", TicketStatus.VALID),
 )
+
+PROMOS = (PromoSpec("paid", "Demo: скидка 20%", 20, "DEMO20"),)
 
 
 # --- result ---------------------------------------------------------------------------------
@@ -202,12 +228,22 @@ class TicketOutRow:
 
 
 @dataclass
+class PromoOutRow:
+    code: str
+    campaign: str
+    event_title: str
+    qr_token: str
+    qr_link: str
+
+
+@dataclass
 class SeedResult:
     accounts: list[AccountOut] = field(default_factory=list)
     generated_password: str | None = None
     venues: list[Venue] = field(default_factory=list)
     events: dict[str, Event] = field(default_factory=dict)
     tickets: list[TicketOutRow] = field(default_factory=list)
+    promos: list[PromoOutRow] = field(default_factory=list)
     created: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
 
@@ -217,6 +253,9 @@ class SeedError(RuntimeError):
 
 
 # --- steps ----------------------------------------------------------------------------------
+
+
+_CLOSED = (EventStatus.CANCELLED, EventStatus.COMPLETED)
 
 
 def _now() -> datetime:
@@ -280,18 +319,33 @@ def _start_at(spec: EventSpec) -> datetime:
     return datetime(day.year, day.month, day.day, spec.hour, tzinfo=TZ)
 
 
+def _find_event(session: Session, organizer: OrganizerProfile, title: str) -> Event | None:
+    return session.scalar(
+        select(Event)
+        .where(Event.organizer_id == organizer.id, Event.title == title)
+        .order_by(Event.start_at)
+    )
+
+
 def _ensure_event(
     session: Session,
     result: SeedResult,
     organizer: OrganizerProfile,
+    organizer_user: User,
     venue: Venue,
     spec: EventSpec,
 ) -> Event:
-    event = session.scalar(
-        select(Event)
-        .where(Event.organizer_id == organizer.id, Event.title == spec.title)
-        .order_by(Event.start_at)
-    )
+    event = _find_event(session, organizer, spec.title)
+    for old_title in spec.old_titles:
+        if event is not None:
+            break
+        event = _find_event(session, organizer, old_title)
+        if event is not None and event.status not in _CLOSED:
+            # An earlier seed's event: rename it instead of creating a second one.
+            events_service.update_event(
+                session, event, EventUpdate(title=spec.title), organizer_user
+            )
+            result.created.append(f"renamed {old_title!r} -> {spec.title!r}")
     if event is None:
         start = _start_at(spec)
         payload = EventCreate(
@@ -378,47 +432,45 @@ def _find_ticket(session: Session, buyer: User, event: Event, attendee: str) -> 
     )
 
 
+def _drop_stale_checkouts(session: Session, buyer: User, event: Event, attendee: str) -> None:
+    """Cancel pending checkouts an interrupted earlier run left behind (paid, not issued)."""
+    stale = session.scalars(
+        select(Order.id)
+        .join(Attendee, Attendee.order_id == Order.id)
+        .where(
+            Order.buyer_user_id == buyer.id,
+            Order.event_id == event.id,
+            Order.status == OrderStatus.PENDING,
+            Attendee.name == attendee,
+        )
+    ).all()
+    for order_id in stale:
+        orders_service.cancel_order(session, buyer, order_id)
+
+
 def _issue_ticket(
-    session: Session, buyer: User, event: Event, ticket_type: TicketType, attendee: str
+    session: Session,
+    buyer: User,
+    event: Event,
+    ticket_type: TicketType,
+    spec: TicketSpec,
 ) -> uuid.UUID:
     """One ticket in its own order, through registration or checkout + simulated payment."""
     data = {
         "items": [RegistrationItemIn(ticket_type_id=ticket_type.id, quantity=1)],
-        "attendees": [AttendeeIn(name=attendee, email=buyer.email)],
+        "attendees": [AttendeeIn(name=spec.attendee, email=buyer.email)],
     }
     if ticket_type.kind == TicketKind.FREE:
         order = orders_service.register_free(session, buyer, event.id, RegistrationCreate(**data))
     else:
-        pending = orders_service.checkout(session, buyer, event.id, CheckoutCreate(**data))
+        _drop_stale_checkouts(session, buyer, event, spec.attendee)
+        checkout = CheckoutCreate(**data, promo_code=spec.promo_code)
+        pending = orders_service.checkout(session, buyer, event.id, checkout)
         paid = payments_service.pay_order(
             session, buyer, pending.id, PayOrderIn(simulate="success")
         )
         order = paid.order
     return order.tickets[0].id
-
-
-def _cancel(session: Session, ticket: Ticket) -> None:
-    # No cancel service yet: mark the ticket and its one-ticket order cancelled.
-    ticket.status = TicketStatus.CANCELLED
-    ticket.order_item.order.status = OrderStatus.CANCELLED
-    session.commit()
-
-
-def _refund(session: Session, ticket: Ticket) -> None:
-    # No refund service yet: a simulated succeeded refund of the whole one-ticket order.
-    order = ticket.order_item.order
-    payment = payments_repository.get_succeeded_order_payment(session, order.id)
-    session.add(
-        Refund(
-            payment_id=payment.id,
-            amount_kzt=payment.amount_kzt,
-            status=RefundStatus.SUCCEEDED,
-            reason="demo seed",
-        )
-    )
-    ticket.status = TicketStatus.REFUNDED
-    order.status = OrderStatus.REFUNDED
-    session.commit()
 
 
 def _check_in(session: Session, scanner: User, event: Event, ticket: Ticket) -> None:
@@ -427,33 +479,64 @@ def _check_in(session: Session, scanner: User, event: Event, ticket: Ticket) -> 
         raise SeedError(f"Seed check-in of {ticket.id} gave {out.result}")
 
 
+@dataclass(frozen=True)
+class _Actors:
+    organizer: User
+    scanner: User
+    buyer: User
+
+
+def _bring_to_status(
+    session: Session,
+    result: SeedResult,
+    spec: TicketSpec,
+    event: Event,
+    ticket: Ticket,
+    actors: _Actors,
+    reset_scans: bool,
+) -> None:
+    """Move the ticket from its actual status to the one the spec wants, where the app
+    allows it. A run interrupted after issuing a ticket leaves it valid; the next run
+    finishes the job. Cancel and refund go through the services (audit, notification, locks).
+    """
+    actual, target = ticket.status, spec.status
+    if actual == target:
+        return
+    order_id = ticket.order_item.order_id
+    if actual == TicketStatus.VALID and target == TicketStatus.CANCELLED:
+        orders_service.cancel_order(session, actors.buyer, order_id)
+    elif actual == TicketStatus.VALID and target == TicketStatus.REFUNDED:
+        payments_service.refund_order(
+            session, actors.organizer, order_id, RefundIn(reason="Demo refund")
+        )
+    elif actual == TicketStatus.VALID and target == TicketStatus.CHECKED_IN:
+        _check_in(session, actors.scanner, event, ticket)
+    elif (actual, target) == (TicketStatus.CHECKED_IN, TicketStatus.VALID):
+        if not reset_scans:
+            return  # scanned during a demo; --reset-scans makes it valid again
+        checkin_service.undo_check_in(session, actors.scanner, ticket.id)
+        result.created.append(f"check-in undone for {spec.label}")
+        return
+    else:
+        result.warnings.append(f"ticket {spec.label} is {actual}, expected {target}: left as is")
+        return
+    result.created.append(f"ticket {spec.label}: {actual} -> {target}")
+
+
 def _ensure_ticket(
     session: Session,
     result: SeedResult,
     spec: TicketSpec,
     event: Event,
     ticket_type: TicketType,
-    buyer: User,
-    scanner: User,
+    actors: _Actors,
     reset_scans: bool,
 ) -> None:
-    ticket = _find_ticket(session, buyer, event, spec.attendee)
+    ticket = _find_ticket(session, actors.buyer, event, spec.attendee)
     if ticket is None:
-        ticket_id = _issue_ticket(session, buyer, event, ticket_type, spec.attendee)
-        ticket = session.get(Ticket, ticket_id)
-        if spec.status == TicketStatus.CANCELLED:
-            _cancel(session, ticket)
-        elif spec.status == TicketStatus.REFUNDED:
-            _refund(session, ticket)
-        elif spec.status == TicketStatus.CHECKED_IN:
-            _check_in(session, scanner, event, ticket)
+        ticket = session.get(Ticket, _issue_ticket(session, actors.buyer, event, ticket_type, spec))
         result.created.append(f"ticket {spec.label}")
-    elif reset_scans and (spec.status, ticket.status) == (
-        TicketStatus.VALID,
-        TicketStatus.CHECKED_IN,
-    ):
-        checkin_service.undo_check_in(session, scanner, ticket.id)
-        result.created.append(f"check-in undone for {spec.label}")
+    _bring_to_status(session, result, spec, event, ticket, actors, reset_scans)
     session.refresh(ticket)
     result.tickets.append(
         TicketOutRow(
@@ -464,6 +547,48 @@ def _ensure_ticket(
             attendee=spec.attendee,
             status=ticket.status,
             qr_token=ticket.qr_token,
+        )
+    )
+
+
+def _ensure_promo(
+    session: Session, result: SeedResult, spec: PromoSpec, event: Event, organizer_user: User
+) -> None:
+    code = session.scalar(select(PromoCode).where(PromoCode.code == spec.code))
+    if code is None:
+        campaign_id = session.scalar(
+            select(PromotionalCampaign.id).where(
+                PromotionalCampaign.event_id == event.id,
+                PromotionalCampaign.name == spec.campaign,
+            )
+        )
+        if campaign_id is None:
+            campaign = promotions_service.create_campaign(
+                session,
+                organizer_user,
+                event,
+                CampaignCreate(
+                    name=spec.campaign,
+                    discount_type=DiscountType.PERCENT,
+                    discount_value=spec.percent,
+                ),
+            )
+            campaign_id = campaign.id
+            result.created.append(f"promo campaign {spec.campaign}")
+        promotions_service.create_code(
+            session, organizer_user, event, campaign_id, CodeCreate(code=spec.code)
+        )
+        result.created.append(f"promo code {spec.code}")
+        code = session.scalar(select(PromoCode).where(PromoCode.code == spec.code))
+    elif code.campaign.event_id != event.id:
+        raise SeedError(f"Promo code {spec.code} already belongs to another event")
+    result.promos.append(
+        PromoOutRow(
+            code=code.code,
+            campaign=spec.campaign,
+            event_title=event.title,
+            qr_token=code.qr_token,
+            qr_link=promotions_service.campaign_qr_link(event.id, code.qr_token),
         )
     )
 
@@ -482,9 +607,9 @@ def run(session: Session, *, password: str | None, reset_scans: bool = False) ->
 
     types_by_event: dict[str, dict[str, TicketType]] = {}
     for spec in EVENTS:
-        event = _ensure_event(session, result, organizer, venues[spec.venue], spec)
+        event = _ensure_event(session, result, organizer, organizer_user, venues[spec.venue], spec)
         result.events[spec.key] = event
-        if event.status in (EventStatus.CANCELLED, EventStatus.COMPLETED):
+        if event.status in _CLOSED:
             result.warnings.append(f"{spec.title} is {event.status}: left as is")
             continue
         if (event.end_at or event.start_at) < _now():
@@ -499,6 +624,13 @@ def run(session: Session, *, password: str | None, reset_scans: bool = False) ->
             _activate_paid_sales(session, result, event, organizer_user)
         _ensure_staff(session, result, event, scanner)
 
+    for promo_spec in PROMOS:
+        if promo_spec.event not in types_by_event:
+            result.warnings.append(f"promo {promo_spec.code} skipped (event not open)")
+            continue
+        _ensure_promo(session, result, promo_spec, result.events[promo_spec.event], organizer_user)
+
+    actors = _Actors(organizer=organizer_user, scanner=scanner, buyer=buyer)
     for ticket_spec in TICKETS:
         types = types_by_event.get(ticket_spec.event)
         if types is None or ticket_spec.ticket_type not in types:
@@ -510,8 +642,7 @@ def run(session: Session, *, password: str | None, reset_scans: bool = False) ->
             ticket_spec,
             result.events[ticket_spec.event],
             types[ticket_spec.ticket_type],
-            buyer,
-            scanner,
+            actors,
             reset_scans,
         )
     return result
@@ -520,26 +651,35 @@ def run(session: Session, *, password: str | None, reset_scans: bool = False) ->
 # --- output ---------------------------------------------------------------------------------
 
 
-def write_qr_pngs(tickets: Sequence[TicketOutRow], directory: Path, scale: int = 10) -> None:
-    """One PNG per ticket. Uses reportlab's QR encoder and Pillow, both already in the image."""
+def write_qr_png(payload: str, path: Path, scale: int = 10) -> None:
+    """A QR PNG with reportlab's QR encoder and Pillow, both already in the image."""
     from PIL import Image
     from reportlab.graphics.barcode import qrencoder
 
-    directory.mkdir(parents=True, exist_ok=True)
+    qr = qrencoder.QRCode(None, qrencoder.QRErrorCorrectLevel.M)
+    qr.addData(payload)
+    qr.make()
     border = 4  # quiet zone in modules, as the QR spec asks
+    modules = qr.getModuleCount()
+    size = modules + 2 * border
+    image = Image.new("1", (size, size), 1)
+    for r in range(modules):
+        for c in range(modules):
+            if qr.isDark(r, c):
+                image.putpixel((c + border, r + border), 0)
+    image = image.resize((size * scale, size * scale), Image.Resampling.NEAREST)
+    image.save(path)
+
+
+def write_qr_pngs(
+    tickets: Sequence[TicketOutRow], directory: Path, promos: Sequence[PromoOutRow] = ()
+) -> None:
+    """One PNG per ticket, and one per promo code (its campaign link: the scanner rejects it)."""
+    directory.mkdir(parents=True, exist_ok=True)
     for row in tickets:
-        qr = qrencoder.QRCode(None, qrencoder.QRErrorCorrectLevel.M)
-        qr.addData(row.qr_token)
-        qr.make()
-        modules = qr.getModuleCount()
-        size = modules + 2 * border
-        image = Image.new("1", (size, size), 1)
-        for r in range(modules):
-            for c in range(modules):
-                if qr.isDark(r, c):
-                    image.putpixel((c + border, r + border), 0)
-        image = image.resize((size * scale, size * scale), Image.Resampling.NEAREST)
-        image.save(directory / f"{row.label}-{row.status}.png")
+        write_qr_png(row.qr_token, directory / f"{row.label}-{row.status}.png")
+    for promo in promos:
+        write_qr_png(promo.qr_link, directory / f"promo-{promo.code}.png")
 
 
 def print_summary(result: SeedResult, *, print_tokens: bool) -> None:
@@ -571,8 +711,14 @@ def print_summary(result: SeedResult, *, print_tokens: bool) -> None:
         print(f"  {row.label:<16} {row.status:<11} {row.ticket_id}  {row.event_title}")
         if print_tokens:
             print(f"    {row.qr_token}")
+    if result.promos:
+        print("\npromo codes:")
+    for promo in result.promos:
+        print(f"  {promo.code:<10} {promo.campaign}  ({promo.event_title})")
+        if print_tokens:
+            print(f"    {promo.qr_link}")
     if not print_tokens:
-        print("  (QR tokens: run again with --print-tokens)")
+        print("  (QR tokens and promo links: run again with --print-tokens)")
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -597,7 +743,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 1
     print_summary(result, print_tokens=args.print_tokens)
     if args.qr_dir:
-        write_qr_pngs(result.tickets, args.qr_dir)
+        write_qr_pngs(result.tickets, args.qr_dir, result.promos)
         print(f"\nQR PNGs: {args.qr_dir}")
     return 0
 

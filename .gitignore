@@ -36,3 +36,4 @@ backups/
 
 # Built web app uploaded to the server (ticketoff-web scripts/deploy.sh)
 /web/
+demo-qr/
