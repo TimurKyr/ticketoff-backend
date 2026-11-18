@@ -14,6 +14,9 @@ from pydantic import (
 
 from app.modules.events.enums import EventStatus, EventVisibility, SeatingType
 
+# Buyers read it before paying; long enough for a real policy, short enough for a card.
+REFUND_POLICY_MAX_LENGTH = 2000
+
 
 class EventBucket(enum.StrEnum):
     """Organizer dashboard grouping, derived from `status` and dates."""
@@ -46,6 +49,7 @@ def check_dates(
 class EventCreate(BaseModel):
     title: str = Field(min_length=1, max_length=200)
     description: str | None = None
+    refund_policy: str | None = Field(default=None, max_length=REFUND_POLICY_MAX_LENGTH)
     category: str | None = Field(default=None, max_length=100)
     venue_id: uuid.UUID
     start_at: AwareDatetime
@@ -69,6 +73,7 @@ class EventUpdate(BaseModel):
 
     title: str | None = Field(default=None, min_length=1, max_length=200)
     description: str | None = None
+    refund_policy: str | None = Field(default=None, max_length=REFUND_POLICY_MAX_LENGTH)
     category: str | None = Field(default=None, max_length=100)
     venue_id: uuid.UUID | None = None
     start_at: AwareDatetime | None = None
@@ -113,6 +118,7 @@ class EventOut(BaseModel):
     venue_id: uuid.UUID
     title: str
     description: str | None
+    refund_policy: str | None
     category: str | None
     status: EventStatus
     visibility: EventVisibility

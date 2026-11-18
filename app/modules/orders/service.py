@@ -6,6 +6,7 @@ from zoneinfo import ZoneInfo
 from sqlalchemy.orm import Session
 
 from app.common.errors import BusinessRuleError, NotFoundError, PermissionDeniedError
+from app.modules.audit import service as audit
 from app.modules.events import service as events_service
 from app.modules.events.enums import EventStatus, SeatingType
 from app.modules.events.models import Event, Seat
@@ -499,6 +500,75 @@ def checkout(
     session.refresh(order, ["created_at"])
     session.commit()  # also releases the ticket type locks
     return order_out(order)
+
+
+# --- cancellation (BE-19) ---
+
+_ALREADY_CLOSED = {
+    OrderStatus.CANCELLED: "Order is already cancelled",
+    OrderStatus.REFUNDED: "Order is already refunded",
+}
+
+
+def _canceller(order: Order, user: User) -> str | None:
+    """'buyer', 'organizer' (owner of the order's event), or None for anyone else.
+
+    Buyer and event owner never change, so the unlocked read is enough to decide this.
+    """
+    if order.buyer_user_id == user.id:
+        return "buyer"
+    if order.event.organizer.user_id == user.id:
+        return "organizer"
+    return None
+
+
+def cancel_order(
+    session: Session, user: User, order_id: uuid.UUID, now: datetime | None = None
+) -> OrderOut:
+    """Cancel a free registration (buyer or event owner) or the buyer's own pending checkout.
+
+    Moving the order to cancelled releases its tickets for sale (inventory counts orders,
+    not tickets). Paid orders are refunded instead (refund_order). Anyone who is neither
+    the buyer nor the event's owner gets 404, so the order's existence is not revealed.
+
+    Locks: event, then order, then the order's tickets (repository lock order). The ticket
+    locks serialize this with a scan at the door, which locks the ticket row it checks in.
+    """
+    # Unlocked read: only to find the event to lock and to answer 404 early.
+    order = repository.get_order(session, order_id)
+    by = _canceller(order, user) if order is not None else None
+    if by is None:
+        raise NotFoundError("Order not found")
+    event = repository.lock_event(session, order.event_id)
+    order = repository.lock_order(session, order_id)
+    tickets = repository.lock_order_tickets(session, order.id)
+    now = now or datetime.now(UTC)  # after the locks, like pay
+
+    if order.status in _ALREADY_CLOSED:
+        raise BusinessRuleError(_ALREADY_CLOSED[order.status])
+    if order.status == OrderStatus.PAID:
+        raise BusinessRuleError("Paid orders are refunded by the organizer")
+    if order.status == OrderStatus.PENDING and by != "buyer":
+        raise BusinessRuleError("Only the buyer can cancel a pending checkout")
+    if now >= event.start_at:
+        raise BusinessRuleError("Event has already started")
+    if any(ticket.status == TicketStatus.CHECKED_IN for ticket in tickets):
+        raise BusinessRuleError("A ticket of this order was already used")
+
+    order.status = OrderStatus.CANCELLED
+    for ticket in tickets:  # all valid here: checked_in was refused above
+        ticket.status = TicketStatus.CANCELLED
+    audit.log(
+        session,
+        actor_user_id=user.id,
+        action_type="order.cancelled",
+        entity_type="order",
+        entity_id=order.id,
+        event_id=order.event_id,
+        details={"by": by, "ticket_ids": [str(ticket.id) for ticket in tickets]},
+    )
+    session.commit()  # order, tickets and audit row together
+    return order_out(repository.get_order_with_details(session, order.id, reload=True))
 
 
 # --- buyer reads ---

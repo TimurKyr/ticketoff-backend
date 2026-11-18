@@ -131,8 +131,8 @@ def test_succeeded_refunds_are_subtracted_pending_and_failed_are_not(
     db_session: Session, event: Event
 ) -> None:
     payment = _order_payment(db_session, event, 100_000)
-    _refund(db_session, payment, 15_000, RefundStatus.SUCCEEDED)
-    _refund(db_session, payment, 5_000, RefundStatus.SUCCEEDED)
+    # One succeeded refund per payment (uq_refunds_payment_succeeded, BE-19), plus others.
+    _refund(db_session, payment, 20_000, RefundStatus.SUCCEEDED)
     _refund(db_session, payment, 30_000, RefundStatus.PENDING)
     _refund(db_session, payment, 40_000, RefundStatus.FAILED)
 

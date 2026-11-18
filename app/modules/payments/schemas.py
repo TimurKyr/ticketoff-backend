@@ -1,10 +1,10 @@
 import uuid
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.modules.orders.schemas import OrderOut
-from app.modules.payments.enums import PaymentStatus
+from app.modules.payments.enums import PaymentStatus, RefundStatus
 
 
 class ActivationChecklistOut(BaseModel):
@@ -56,3 +56,29 @@ class PaymentSummaryOut(BaseModel):
     fee_percent: int
     currency: Literal["KZT"] = "KZT"
     is_simulated: Literal[True] = True
+
+
+# --- refunds (BE-19) ---
+
+REFUND_REASON_MAX_LENGTH = 500
+
+
+class RefundIn(BaseModel):
+    """Full refund of a paid order by the event's organizer; the reason is optional."""
+
+    reason: str | None = Field(default=None, max_length=REFUND_REASON_MAX_LENGTH)
+
+
+class RefundOut(BaseModel):
+    id: uuid.UUID
+    amount_kzt: int
+    status: RefundStatus
+    reason: str | None
+    # Refund has no column of its own: it refunds a payment, and every payment is
+    # simulated (ck_payments_is_simulated), so this is taken from the payment.
+    is_simulated: bool
+
+
+class RefundResultOut(BaseModel):
+    refund: RefundOut
+    order: OrderOut

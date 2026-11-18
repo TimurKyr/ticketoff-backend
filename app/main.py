@@ -13,6 +13,7 @@ import app.modules.registry  # noqa: F401
 from app.core.config import get_settings
 from app.core.db import engine, get_session
 from app.core.error_handlers import add_error_handlers
+from app.modules.audit.router import timeline_router
 from app.modules.checkin.router import checkin_router, staff_router
 from app.modules.events.router import events_router, organizer_router, venues_router
 from app.modules.identity.router import organizer_profile_router
@@ -54,6 +55,7 @@ app.include_router(orders_router)
 app.include_router(tickets_router)
 app.include_router(activation_router)
 app.include_router(payments_router)
+app.include_router(timeline_router)
 
 
 @app.get("/health", tags=["health"])

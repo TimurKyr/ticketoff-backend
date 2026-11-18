@@ -91,6 +91,8 @@ class Event(Base):
     )
     title = Column(String, nullable=False)
     description = Column(Text)
+    # Shown to buyers before they pay (BE-19); free text, optional.
+    refund_policy = Column(Text)
     category = Column(String)
     status = Column(enum_column(EventStatus), nullable=False, default=EventStatus.DRAFT)
     visibility = Column(
