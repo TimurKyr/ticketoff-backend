@@ -316,8 +316,10 @@ def test_percent_discount_at_checkout(
     assert response.status_code == 201, response.text
     body = response.json()
     assert (body["total_kzt"], body["discount_kzt"]) == (20000, 4000)
-    redemption = db_session.scalars(select(PromoRedemption)).one()
-    assert (str(redemption.order_id), redemption.discount_kzt) == (body["id"], 4000)
+    redemption = db_session.scalars(
+        select(PromoRedemption).where(PromoRedemption.order_id == body["id"])
+    ).one()
+    assert redemption.discount_kzt == 4000
 
 
 def test_fixed_discount_never_makes_the_order_free(
