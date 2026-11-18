@@ -126,6 +126,16 @@ def get_my_order(order_id: uuid.UUID, user: CurrentUser, session: SessionDep) ->
     return service.get_my_order(session, user, order_id)
 
 
+@orders_router.post(
+    "/{order_id}/cancel",
+    response_model=OrderOut,
+    summary="Cancel a free registration (buyer or organizer) or my pending checkout",
+)
+def cancel_order(order_id: uuid.UUID, user: CurrentUser, session: SessionDep) -> OrderOut:
+    """Paid orders are refunded by the organizer instead (409 here)."""
+    return service.cancel_order(session, user, order_id)
+
+
 @tickets_router.get(
     "/{ticket_id}", response_model=TicketOut, summary="One of my tickets, with its QR token"
 )

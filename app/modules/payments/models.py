@@ -75,7 +75,17 @@ class Payment(Base):
 
 class Refund(Base):
     __tablename__ = "refunds"
-    __table_args__ = (CheckConstraint("amount_kzt > 0", name="amount_positive"),)
+    __table_args__ = (
+        CheckConstraint("amount_kzt > 0", name="amount_positive"),
+        # Full refunds only: at most one succeeded refund per payment, so a double refund is
+        # refused by the DB even if the order lock in the service were bypassed.
+        Index(
+            "uq_refunds_payment_succeeded",
+            "payment_id",
+            unique=True,
+            postgresql_where=text("status = 'succeeded'"),
+        ),
+    )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     payment_id = Column(UUID(as_uuid=True), ForeignKey("payments.id"), nullable=False, index=True)

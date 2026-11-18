@@ -178,9 +178,10 @@ def add(session: Session, ticket_type: TicketType) -> None:
 
 
 # Lock order for anything that changes inventory: the event row first, then the rest
-# (its ticket types in id order, or the order being paid). Every caller (free
-# registration, paid checkout, pay) must follow it, so concurrent transactions never wait
-# on each other in a cycle.
+# (its ticket types in id order, or the order being paid/cancelled and then that order's
+# tickets). Every caller (free registration, paid checkout, pay, cancel) must follow it,
+# so concurrent transactions never wait on each other in a cycle. Check-in locks a single
+# ticket row and nothing after it, so it cannot close a cycle either.
 
 
 def lock_event(session: Session, event_id: uuid.UUID) -> Event | None:
@@ -246,8 +247,8 @@ def get_order(session: Session, order_id: uuid.UUID) -> Order | None:
 def lock_order(session: Session, order_id: uuid.UUID) -> Order | None:
     """SELECT ... FROM orders WHERE id = :id FOR UPDATE, held until commit or rollback.
 
-    Serializes payments of one order. Pay locks the order's event first and this row
-    second; nothing locks an order before an event, so this cannot form a cycle.
+    Serializes pays and cancels of one order. They lock the order's event first and this
+    row second; nothing locks an order before an event, so this cannot form a cycle.
     """
     stmt = (
         select(Order)
@@ -302,3 +303,22 @@ def get_ticket_for_pdf(session: Session, ticket_id: uuid.UUID) -> Ticket | None:
             joinedload(Ticket.seat).joinedload(Seat.row).joinedload(Row.section),
         ),
     )
+
+
+def lock_order_tickets(session: Session, order_id: uuid.UUID) -> list[Ticket]:
+    """SELECT ... FOR UPDATE OF tickets: every ticket of the order, in id order.
+
+    Take it after lock_event and lock_order. Check-in locks the ticket row it scans, so a
+    cancel or refund holding these locks is serialized with a scan at the door: the scan
+    either waits and then sees the new status, or wins and the cancel sees checked_in.
+    """
+    stmt = (
+        select(Ticket)
+        .join(OrderItem, OrderItem.id == Ticket.order_item_id)
+        .where(OrderItem.order_id == order_id)
+        .order_by(Ticket.id)
+        .with_for_update(of=Ticket)
+        # Re-read rows already in the session: a scan may have committed while we waited.
+        .execution_options(populate_existing=True)
+    )
+    return list(session.scalars(stmt))

@@ -3,7 +3,6 @@ import uuid
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.modules.audit.models import AuditLog
 from app.modules.identity.enums import PayoutAccountStatus
 from app.modules.identity.models import OrganizerProfile, PayoutAccount
 from app.modules.ops.models import Notification
@@ -84,9 +83,8 @@ def add_payment(session: Session, payment: Payment) -> None:
     session.flush()
 
 
-def add_audit_log(session: Session, entry: AuditLog) -> None:
-    """Append an audit row; it commits together with the change it records."""
-    session.add(entry)
+def add_refund(session: Session, refund: Refund) -> None:
+    session.add(refund)
     session.flush()
 
 

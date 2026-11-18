@@ -1,10 +1,11 @@
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, status
 from pydantic import AwareDatetime
 from sqlalchemy.orm import Session
 
+from app.common.pagination import Limit, Offset
 from app.core.db import get_session
 from app.modules.events import service
 from app.modules.events.dependencies import require_event_owner
@@ -23,8 +24,6 @@ from app.modules.identity.models import OrganizerProfile
 SessionDep = Annotated[Session, Depends(get_session)]
 OrganizerDep = Annotated[OrganizerProfile, Depends(require_organizer)]
 OwnedEventDep = Annotated[Event, Depends(require_event_owner)]
-Limit = Annotated[int, Query(ge=1, le=100)]
-Offset = Annotated[int, Query(ge=0)]
 
 venues_router = APIRouter(prefix="/venues", tags=["venues"])
 events_router = APIRouter(prefix="/events", tags=["events"])

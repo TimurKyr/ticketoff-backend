@@ -12,6 +12,8 @@ from app.modules.payments.schemas import (
     PaymentResultOut,
     PaymentSummaryOut,
     PayOrderIn,
+    RefundIn,
+    RefundResultOut,
 )
 
 # Owner only: someone else's event answers 404 (require_event_owner).
@@ -63,6 +65,18 @@ def pay_order(
 ) -> PaymentResultOut:
     """200 for both results: on "fail" the payment is failed and the order stays pending."""
     return service.pay_order(session, user, order_id, payload)
+
+
+@payments_router.post(
+    "/orders/{order_id}/refund",
+    response_model=RefundResultOut,
+    summary="Fully refund a paid order of my event (simulated)",
+)
+def refund_order(
+    order_id: uuid.UUID, payload: RefundIn, user: CurrentUser, session: SessionDep
+) -> RefundResultOut:
+    """Event organizer only; anyone else, the buyer included, gets 404."""
+    return service.refund_order(session, user, order_id, payload)
 
 
 @payments_router.get(

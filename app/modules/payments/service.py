@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 
 from app.common.errors import BusinessRuleError, NotFoundError
 from app.core.config import get_settings
-from app.modules.audit.models import AuditLog
+from app.modules.audit import service as audit
 from app.modules.events.enums import EventStatus
 from app.modules.events.models import Event
 from app.modules.identity.enums import PayoutAccountStatus, VerificationStatus
@@ -23,18 +23,21 @@ from app.modules.ops.enums import NotificationChannel, NotificationType
 from app.modules.ops.models import Notification
 from app.modules.orders import repository as orders_repository
 from app.modules.orders import service as orders_service
-from app.modules.orders.enums import OrderStatus
+from app.modules.orders.enums import OrderStatus, TicketStatus
 from app.modules.orders.models import Order
 from app.modules.orders.service import CLOSED_EVENT_STATUSES
 from app.modules.payments import repository
-from app.modules.payments.enums import PaymentPurpose, PaymentStatus
-from app.modules.payments.models import Payment
+from app.modules.payments.enums import PaymentPurpose, PaymentStatus, RefundStatus
+from app.modules.payments.models import Payment, Refund
 from app.modules.payments.schemas import (
     ActivationChecklistOut,
     PaymentOut,
     PaymentResultOut,
     PaymentSummaryOut,
     PayOrderIn,
+    RefundIn,
+    RefundOut,
+    RefundResultOut,
 )
 
 
@@ -69,32 +72,16 @@ def _maybe_activate(session: Session, event: Event) -> ActivationChecklistOut:
     return checklist
 
 
-def _audit_payment(
-    session: Session, payment: Payment, actor: User, event_id: uuid.UUID, action_type: str
-) -> None:
-    """Audit row for a new payment, flushed into the payment's own transaction.
-
-    Only called when a payment row is created, so an idempotent repeat writes nothing.
-    event_id is passed in: an order payment reaches its event through the order and must
-    not carry event_id itself (ck_payments_ticket_order_links_order_only).
-    """
+def _payment_audit_details(payment: Payment) -> dict[str, object]:
+    """details for a payment's audit row. Audited only when a payment row is created, so an
+    idempotent repeat writes nothing."""
     details: dict[str, object] = {
         "amount_kzt": payment.amount_kzt,
         "is_simulated": payment.is_simulated,
     }
     if payment.order_id is not None:
         details["order_id"] = str(payment.order_id)
-    repository.add_audit_log(
-        session,
-        AuditLog(
-            actor_user_id=actor.id,
-            event_id=event_id,
-            action_type=action_type,
-            entity_type="payment",
-            entity_id=payment.id,
-            details=details,
-        ),
-    )
+    return details
 
 
 def _lock_open_event(session: Session, event_id: uuid.UUID) -> Event:
@@ -158,7 +145,15 @@ def pay_activation(session: Session, event: Event, user: User) -> ActivationChec
             is_simulated=True,
         )
         repository.add_payment(session, payment)
-        _audit_payment(session, payment, user, event.id, "payment.activation_succeeded")
+        audit.log(
+            session,
+            actor_user_id=user.id,
+            action_type="payment.activation_succeeded",
+            entity_type="payment",
+            entity_id=payment.id,
+            event_id=event.id,
+            details=_payment_audit_details(payment),
+        )
     return _finish_step(session, event)
 
 
@@ -230,12 +225,16 @@ def pay_order(
         is_simulated=True,
     )
     repository.add_payment(session, payment)
-    _audit_payment(
+    audit.log(
         session,
-        payment,
-        user,
-        order.event_id,
-        "payment.order_succeeded" if succeeded else "payment.order_failed",
+        actor_user_id=user.id,
+        action_type="payment.order_succeeded" if succeeded else "payment.order_failed",
+        entity_type="payment",
+        entity_id=payment.id,
+        # An order payment must not carry event_id (ck_payments_ticket_order_links_order_only);
+        # the audit row gets it from the order.
+        event_id=order.event_id,
+        details=_payment_audit_details(payment),
     )
 
     if succeeded:
@@ -253,6 +252,101 @@ def pay_order(
     # A failed payment changes nothing else: the order stays pending and keeps its hold.
     session.commit()  # one commit: payment, audit row, status, tickets and notification
     return _result(session, order, payment)
+
+
+# --- refunding a paid order (BE-19) ---
+
+_NOT_REFUNDABLE = {
+    OrderStatus.REFUNDED: "Order is already refunded",
+    OrderStatus.CANCELLED: "Order is already cancelled",
+}
+
+
+def refund_order(
+    session: Session,
+    user: User,
+    order_id: uuid.UUID,
+    data: RefundIn,
+) -> RefundResultOut:
+    """Fully refund a paid order (simulated). Only the event's organizer may do it.
+
+    Anyone else, the buyer included, gets 404: the order's existence is not revealed.
+    Allowed after the event started (the organizer's decision). Every ticket becomes
+    refunded, used ones too, and the order becomes refunded, which releases its inventory.
+
+    Locks: event, then order, then the order's tickets (repository lock order), so two
+    refunds of one order run one after the other (the second gets 409) and a scan at the
+    door either waits and answers `refunded` or wins first. uq_refunds_payment_succeeded
+    refuses a second succeeded refund even if the locks were bypassed.
+    """
+    # Unlocked read: only to find the event to lock and to answer 404 early.
+    order = orders_repository.get_order(session, order_id)
+    if order is None or order.event.organizer.user_id != user.id:
+        raise NotFoundError("Order not found")
+    orders_repository.lock_event(session, order.event_id)
+    order = orders_repository.lock_order(session, order_id)
+    tickets = orders_repository.lock_order_tickets(session, order.id)
+    # No time rules for refunds (allowed after the event started), so no clock is read.
+
+    if order.status in _NOT_REFUNDABLE:
+        raise BusinessRuleError(_NOT_REFUNDABLE[order.status])
+    if order.status != OrderStatus.PAID:
+        raise BusinessRuleError("Only paid orders can be refunded")
+    payment = repository.get_succeeded_order_payment(session, order.id)
+    if payment is None:  # paid is only ever set together with a succeeded payment
+        raise RuntimeError(f"Paid order {order.id} has no succeeded payment")
+
+    refund = Refund(
+        payment_id=payment.id,
+        amount_kzt=payment.amount_kzt,  # full refunds only
+        status=RefundStatus.SUCCEEDED,  # the model default is pending
+        reason=data.reason,
+    )
+    repository.add_refund(session, refund)
+    order.status = OrderStatus.REFUNDED
+    for ticket in tickets:  # valid and checked_in alike
+        ticket.status = TicketStatus.REFUNDED
+    repository.add_notification(
+        session,
+        Notification(
+            user_id=order.buyer_user_id,
+            type=NotificationType.REFUND_PROCESSED,
+            channel=NotificationChannel.IN_APP,
+            payload={
+                "order_id": str(order.id),
+                "refund_id": str(refund.id),
+                "amount_kzt": refund.amount_kzt,
+            },
+        ),
+    )
+    audit.log(
+        session,
+        actor_user_id=user.id,
+        action_type="order.refunded",
+        entity_type="order",
+        entity_id=order.id,
+        event_id=order.event_id,
+        details={
+            "refund_id": str(refund.id),
+            "payment_id": str(payment.id),
+            "amount_kzt": refund.amount_kzt,
+            "reason": refund.reason,
+            "is_simulated": payment.is_simulated,
+        },
+    )
+    session.commit()  # refund, statuses, notification and audit row together
+
+    order = orders_repository.get_order_with_details(session, order.id, reload=True)
+    return RefundResultOut(
+        refund=RefundOut(
+            id=refund.id,
+            amount_kzt=refund.amount_kzt,
+            status=refund.status,
+            reason=refund.reason,
+            is_simulated=payment.is_simulated,
+        ),
+        order=orders_service.order_out(order),
+    )
 
 
 # --- organizer summary ---

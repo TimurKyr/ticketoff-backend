@@ -124,6 +124,7 @@ def duplicate_event(session: Session, event: Event) -> Event:
         venue_id=event.venue_id,
         title=event.title,
         description=event.description,
+        refund_policy=event.refund_policy,
         category=event.category,
         status=EventStatus.DRAFT,
         visibility=event.visibility,
