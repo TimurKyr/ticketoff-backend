@@ -288,6 +288,7 @@ def test_real_actions_appear_in_order(client: TestClient) -> None:
             ("payment.order_succeeded", "payment"),
             ("order.cancelled", "order"),
             ("order.refunded", "order"),
+            ("ticket.checked_in", "ticket"),  # audited since BE-19 part 2
             ("ticket.check_in_reversed", "ticket"),
         ]
         assert [i["actor_user_id"] for i in items] == [
@@ -296,14 +297,15 @@ def test_real_actions_appear_in_order(client: TestClient) -> None:
             str(buyer.id),
             str(owner.id),
             str(owner.id),
+            str(owner.id),
         ]
         assert items[1]["entity_id"] == str(paid.payment.id)
         assert items[2]["entity_id"] == str(free.id)
         assert items[3]["entity_id"] == str(pending.id)
-        assert items[4]["entity_id"] == str(ticket.id)
+        assert items[4]["entity_id"] == items[5]["entity_id"] == str(ticket.id)
         created = [i["created_at"] for i in items]
-        assert created == sorted(created) and len(set(created)) == 5  # one transaction each
-        assert response.json()["total"] == 5
+        assert created == sorted(created) and len(set(created)) == 6  # one transaction each
+        assert response.json()["total"] == 6
     finally:
         s.rollback()
         order_ids = select(Order.id).where(Order.event_id.in_(ids["events"]))

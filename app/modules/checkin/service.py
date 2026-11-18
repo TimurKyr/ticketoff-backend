@@ -6,7 +6,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.common.errors import BusinessRuleError, NotFoundError
-from app.modules.audit.models import AuditLog
+from app.modules.audit import service as audit
 from app.modules.checkin import repository
 from app.modules.checkin.schemas import (
     AttendeePage,
@@ -176,8 +176,22 @@ def scan(session: Session, user: User, event_id: uuid.UUID, qr_token: str) -> Sc
         return _out(session, event.id, _RESULT_BY_STATUS[ticket.status], ticket)
 
     ticket.status = TicketStatus.CHECKED_IN
-    session.add(CheckInRecord(ticket_id=ticket.id, event_admin_id=user.id))
+    record = CheckInRecord(ticket_id=ticket.id, event_admin_id=user.id)
+    session.add(record)
+    # Everything that writes stays inside the try: the flush (here or in audit.log) is where
+    # uq_check_in_records_active_ticket refuses a gate that lost the race, so it must be
+    # caught below; the rollback then drops the audit row too.
     try:
+        session.flush()  # inserts the record and gives it its id
+        audit.log(
+            session,
+            actor_user_id=user.id,
+            action_type="ticket.checked_in",
+            entity_type="ticket",
+            entity_id=ticket.id,
+            event_id=event.id,
+            details={"check_in_record_id": str(record.id)},
+        )
         session.commit()
     except IntegrityError:
         session.rollback()  # another gate won the race
@@ -207,17 +221,16 @@ def undo_check_in(session: Session, user: User, ticket_id: uuid.UUID) -> Scanned
 
     record.is_reversed = True
     ticket.status = TicketStatus.VALID
-    session.add(
-        AuditLog(
-            actor_user_id=user.id,
-            event_id=event_id,
-            action_type="ticket.check_in_reversed",
-            entity_type="ticket",
-            entity_id=ticket.id,
-            details={"check_in_record_id": str(record.id)},
-        )
+    audit.log(
+        session,
+        actor_user_id=user.id,
+        action_type="ticket.check_in_reversed",
+        entity_type="ticket",
+        entity_id=ticket.id,
+        event_id=event_id,
+        details={"check_in_record_id": str(record.id)},
     )
-    session.commit()
+    session.commit()  # the reversal and its audit row together
     return _scanned(session, ticket)
 
 

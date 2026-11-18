@@ -18,6 +18,7 @@ from sqlalchemy import delete, func, select
 
 from app.common.errors import BusinessRuleError, NotFoundError
 from app.core.db import SessionLocal
+from app.modules.audit.models import AuditLog
 from app.modules.events import repository as events_repository
 from app.modules.events import service as events_service
 from app.modules.events.enums import EventStatus
@@ -79,6 +80,7 @@ def free_event() -> Iterator[FreeEvent]:
     with SessionLocal() as cleanup:
         order_ids = select(Order.id).where(Order.event_id == data.event_id)
         item_ids = select(OrderItem.id).where(OrderItem.order_id.in_(order_ids))
+        cleanup.execute(delete(AuditLog).where(AuditLog.event_id == data.event_id))
         cleanup.execute(delete(Notification).where(Notification.user_id == data.buyer_id))
         cleanup.execute(delete(Ticket).where(Ticket.order_item_id.in_(item_ids)))
         cleanup.execute(delete(Attendee).where(Attendee.order_id.in_(order_ids)))
@@ -128,7 +130,8 @@ def _unpublish(data: FreeEvent, results: list[object]) -> None:
     with SessionLocal() as session:
         try:
             event = session.get_one(Event, data.event_id)
-            results.append(events_service.unpublish_event(session, event))
+            owner = session.get_one(User, event.organizer.user_id)
+            results.append(events_service.unpublish_event(session, event, owner))
         except Exception as exc:  # noqa: BLE001 - checked by the caller
             results.append(exc)
 

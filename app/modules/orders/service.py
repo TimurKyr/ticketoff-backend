@@ -195,6 +195,12 @@ def list_ticket_types(
     return [_to_out(tt, sold[tt.id]) for tt in ticket_types]
 
 
+_AUDITED_TYPE_FIELDS = (
+    ("price_kzt", "ticket_type.price_changed"),
+    ("quantity_total", "ticket_type.quantity_changed"),
+)
+
+
 def update_ticket_type(
     session: Session,
     organizer_profile_id: uuid.UUID,
@@ -202,7 +208,11 @@ def update_ticket_type(
     ticket_type_id: uuid.UUID,
     data: TicketTypeUpdate,
     now: datetime | None = None,
+    *,
+    actor_user_id: uuid.UUID | None = None,
 ) -> TicketTypeOut:
+    """actor_user_id is recorded on the audit rows; the route always passes the caller.
+    None means a system or script change (audit rows allow a missing actor)."""
     # Ownership comes from the event in the path; the type is loaded after the lock, so it
     # reflects any change committed by whoever held the lock before us.
     event = _lock_owned_event(session, event_id, organizer_profile_id)
@@ -235,9 +245,22 @@ def update_ticket_type(
             event, others + ticket_type.quantity_total, others + merged["quantity_total"]
         )
 
+    old = {"price_kzt": ticket_type.price_kzt, "quantity_total": ticket_type.quantity_total}
     for field, value in changes.items():
         setattr(ticket_type, field, value)
-    session.commit()
+    # One row per changed value (two if both change), only when it really changed.
+    for field, action_type in _AUDITED_TYPE_FIELDS:
+        if field in changes and changes[field] != old[field]:
+            audit.log(
+                session,
+                actor_user_id=actor_user_id,
+                action_type=action_type,
+                entity_type="ticket_type",
+                entity_id=ticket_type.id,
+                event_id=event.id,
+                details={"name": ticket_type.name, "old": old[field], "new": changes[field]},
+            )
+    session.commit()  # the change and its audit rows together
     session.refresh(ticket_type)
     return _to_out(ticket_type, sold)
 
