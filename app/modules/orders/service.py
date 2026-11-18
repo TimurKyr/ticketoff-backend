@@ -30,6 +30,7 @@ from app.modules.orders.schemas import (
     TicketTypeUpdate,
     ticket_type_rule_error,
 )
+from app.modules.promotions import service as promotions_service
 
 # Organizers cannot change ticket types once the event is over or called off.
 CLOSED_EVENT_STATUSES = (EventStatus.CANCELLED, EventStatus.COMPLETED)
@@ -372,16 +373,16 @@ def _lock_and_validate(
     return event, ticket_types
 
 
-def _compute_total(
-    items: Sequence[RegistrationItemIn], ticket_types: Sequence[TicketType]
-) -> tuple[int, int]:
-    """(total_kzt, discount_kzt) from the locked DB prices; the client never sends a price."""
+def _compute_total(items: Sequence[RegistrationItemIn], ticket_types: Sequence[TicketType]) -> int:
+    """The total in KZT before any discount, from the locked DB prices.
+
+    The client never sends a price. A promo code is applied separately, by checkout().
+    """
     total = sum(
         item.quantity * ticket_type.price_kzt
         for item, ticket_type in zip(items, ticket_types, strict=True)
     )
-    discount = 0  # BE-16: apply promo here
-    return total, discount
+    return total
 
 
 def issue_tickets(order: Order) -> None:
@@ -423,6 +424,7 @@ def order_out(order: Order) -> OrderOut:
             "event_id": order.event_id,
             "status": order.status,
             "total_kzt": order.total_kzt,
+            "discount_kzt": order.discount_kzt,
             "items": [
                 {
                     "ticket_type_id": item.ticket_type_id,
@@ -450,18 +452,19 @@ def _build_order(
     data: RegistrationCreate,
     ticket_types: Sequence[TicketType],
     status: OrderStatus,
+    discount_kzt: int = 0,
 ) -> Order:
     """A new order with its items and one attendee per ticket, linked to the attendee's item.
 
     Prices come from the locked ticket types, never from the request.
     """
-    total, discount = _compute_total(data.items, ticket_types)
+    total = _compute_total(data.items, ticket_types)
     order = Order(
         buyer_user_id=user.id,
         event_id=event.id,
         status=status,
         total_kzt=total,
-        discount_kzt=discount,
+        discount_kzt=discount_kzt,
     )
     # Attendees are matched to tickets in item order.
     attendees = iter(data.attendees)
@@ -516,9 +519,23 @@ def checkout(
     """
     now = now or datetime.now(UTC)
     event, ticket_types = _lock_and_validate(session, event_id, data.items, now, TicketKind.PAID)
-    order = _build_order(user, event, data, ticket_types, OrderStatus.PENDING)
+    promo = None
+    if data.promo_code:
+        # After the event lock (taken in _lock_and_validate), so the use count is exact.
+        total = _compute_total(data.items, ticket_types)
+        promo = promotions_service.apply_at_checkout(session, event.id, data.promo_code, total, now)
+    order = _build_order(
+        user,
+        event,
+        data,
+        ticket_types,
+        OrderStatus.PENDING,
+        discount_kzt=promo.discount_kzt if promo else 0,
+    )
 
     repository.add_order(session, order)
+    if promo:
+        promotions_service.record_redemption(session, order, promo)  # same transaction
     # created_at is the DB's now(); load it so expires_at can be computed.
     session.refresh(order, ["created_at"])
     session.commit()  # also releases the ticket type locks
