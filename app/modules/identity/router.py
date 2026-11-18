@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
 
 from app.modules.identity import service
-from app.modules.identity.dependencies import CurrentUser, SessionDep
+from app.modules.identity.dependencies import ACCOUNT_SUSPENDED, CurrentUser, SessionDep
 from app.modules.identity.models import OrganizerProfile, User
 from app.modules.identity.schemas import (
     MeOut,
@@ -40,6 +40,9 @@ def login(form: FormDep, session: SessionDep) -> TokenOut:
             detail="Incorrect email or password",
             headers={"WWW-Authenticate": "Bearer"},
         )
+    # Only after the password matched, so a wrong password never reveals the suspension.
+    if user.is_suspended:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, detail=ACCOUNT_SUSPENDED)
     return TokenOut(access_token=create_access_token(user.id))
 
 

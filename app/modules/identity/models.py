@@ -1,6 +1,6 @@
 import uuid
 
-from sqlalchemy import Boolean, Column, ForeignKey, String
+from sqlalchemy import Boolean, Column, ForeignKey, String, false
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
@@ -22,6 +22,8 @@ class User(Base):
     password_hash = Column(String, nullable=False)
     system_role = Column(enum_column(SystemRole), nullable=False, default=SystemRole.ATTENDEE)
     email_verified = Column(Boolean, nullable=False, default=False)
+    # Blocked by a platform admin (BE-22): login and every existing token answer 403.
+    is_suspended = Column(Boolean, nullable=False, default=False, server_default=false())
 
     organizer_profile = relationship("OrganizerProfile", back_populates="user", uselist=False)
 

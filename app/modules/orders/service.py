@@ -34,6 +34,7 @@ from app.modules.promotions import service as promotions_service
 
 # Organizers cannot change ticket types once the event is over or called off.
 CLOSED_EVENT_STATUSES = (EventStatus.CANCELLED, EventStatus.COMPLETED)
+SALES_SUSPENDED_MESSAGE = "Sales are suspended for this event by the platform"
 
 _RULE_FIELDS = (
     "kind",
@@ -340,6 +341,9 @@ def _lock_and_validate(
     # Same check again on the locked, freshly re-read row: a cancel (or switch to private)
     # that committed while we waited for the lock wins.
     event = events_service.get_public_event(session, event_id)
+    # On the locked row too: a suspend (BE-22) that committed while we waited wins.
+    if event.sales_suspended:
+        raise BusinessRuleError(SALES_SUSPENDED_MESSAGE)
     if event.seating_type == SeatingType.ASSIGNED:
         raise BusinessRuleError("This event uses seat selection")
     _ensure_registration_open(event, now)

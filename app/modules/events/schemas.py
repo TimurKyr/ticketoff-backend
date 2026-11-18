@@ -126,6 +126,7 @@ class EventOut(BaseModel):
     visibility: EventVisibility
     seating_type: SeatingType
     paid_sales_active: bool
+    sales_suspended: bool
     capacity: int | None
     start_at: datetime
     end_at: datetime | None

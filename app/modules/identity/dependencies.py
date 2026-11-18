@@ -14,6 +14,8 @@ SessionDep = Annotated[Session, Depends(get_session)]
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
 
+ACCOUNT_SUSPENDED = "Account is suspended"
+
 
 def get_current_user(
     token: Annotated[str, Depends(oauth2_scheme)],
@@ -31,6 +33,9 @@ def get_current_user(
     user = session.get(User, user_id)
     if user is None:
         raise credentials_error
+    # Checked on every request, so a token issued before the suspension stops working too.
+    if user.is_suspended:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, detail=ACCOUNT_SUSPENDED)
     return user
 
 
