@@ -17,6 +17,8 @@ class ScanResult(enum.StrEnum):
     REFUNDED = "refunded"
     WRONG_EVENT = "wrong_event"
     CAMPAIGN_QR_REJECTED = "campaign_qr_rejected"
+    # The event was called off: nobody is admitted, whatever the ticket.
+    EVENT_CANCELLED = "event_cancelled"
 
 
 class ScanIn(BaseModel):
@@ -47,6 +49,13 @@ class AttendeeRow(BaseModel):
     status: TicketStatus
 
 
+class AttendeePage(BaseModel):
+    items: list[AttendeeRow]
+    total: int
+    limit: int
+    offset: int
+
+
 class StatsOut(BaseModel):
     registered: int
     checked_in: int
@@ -74,4 +83,8 @@ class MyEventOut(BaseModel):
     status: EventStatus
     start_at: datetime
     end_at: datetime | None
+    venue_name: str
+    venue_address: str | None
+    # IANA name, e.g. "Asia/Almaty": show start_at in the venue's local time.
+    timezone: str
     is_owner: bool

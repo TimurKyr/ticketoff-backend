@@ -1,7 +1,7 @@
 import uuid
 
 from sqlalchemy import func, or_, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from app.modules.events.enums import EventStatus
 from app.modules.events.models import Event
@@ -52,13 +52,24 @@ def list_scannable_events(session: Session, user_id: uuid.UUID) -> list[tuple[Ev
         Event.status != EventStatus.CANCELLED,
         or_(Event.id.in_(staffed), Event.organizer_id == profile_id),
     )
-    events = session.scalars(stmt.order_by(Event.start_at.asc(), Event.id.asc())).all()
+    stmt = stmt.options(joinedload(Event.venue)).order_by(Event.start_at.asc(), Event.id.asc())
+    events = session.scalars(stmt).all()
     return [(event, event.organizer_id == profile_id) for event in events]
 
 
 def find_ticket_for_update(session: Session, qr_token: str) -> Ticket | None:
     """Lock the ticket row so two scans of the same QR are handled one after another."""
     return session.scalar(select(Ticket).where(Ticket.qr_token == qr_token).with_for_update())
+
+
+def event_id_of_ticket(session: Session, ticket_id: uuid.UUID) -> uuid.UUID | None:
+    """The event a ticket belongs to, without locking anything; None for an unknown ticket."""
+    return session.scalar(
+        select(Order.event_id)
+        .join(OrderItem, OrderItem.order_id == Order.id)
+        .join(Ticket, Ticket.order_item_id == OrderItem.id)
+        .where(Ticket.id == ticket_id)
+    )
 
 
 def get_ticket_for_update(session: Session, ticket_id: uuid.UUID) -> Ticket | None:
@@ -119,8 +130,9 @@ def _escape_like(value: str) -> str:
 
 
 def search_attendees(
-    session: Session, event_id: uuid.UUID, q: str | None, limit: int
-) -> list[tuple[Ticket, Attendee, str]]:
+    session: Session, event_id: uuid.UUID, q: str | None, limit: int, offset: int
+) -> tuple[list[tuple[Ticket, Attendee, str]], int]:
+    """One page of the event's tickets with attendee and ticket type name, and the total."""
     stmt = (
         _event_tickets(event_id)
         .join(Attendee, Attendee.id == Ticket.attendee_id)
@@ -132,5 +144,6 @@ def search_attendees(
         stmt = stmt.where(
             or_(Attendee.name.ilike(pattern, escape="/"), Attendee.email.ilike(pattern, escape="/"))
         )
-    stmt = stmt.order_by(Attendee.name.asc(), Ticket.id.asc()).limit(limit)
-    return [(row[0], row[1], row[2]) for row in session.execute(stmt)]
+    total = session.scalar(select(func.count()).select_from(stmt.subquery())) or 0
+    stmt = stmt.order_by(Attendee.name.asc(), Ticket.id.asc()).limit(limit).offset(offset)
+    return [(row[0], row[1], row[2]) for row in session.execute(stmt)], total

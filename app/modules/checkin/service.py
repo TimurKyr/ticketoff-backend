@@ -5,10 +5,11 @@ import uuid
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.common.errors import BusinessRuleError, NotFoundError, PermissionDeniedError
+from app.common.errors import BusinessRuleError, NotFoundError
 from app.modules.audit.models import AuditLog
 from app.modules.checkin import repository
 from app.modules.checkin.schemas import (
+    AttendeePage,
     AttendeeRow,
     MyEventOut,
     ScannedTicket,
@@ -17,6 +18,7 @@ from app.modules.checkin.schemas import (
     StaffOut,
     StatsOut,
 )
+from app.modules.events.enums import EventStatus
 from app.modules.events.models import Event
 from app.modules.identity.models import StaffAssignment, User
 from app.modules.ops.models import CheckInRecord
@@ -42,12 +44,16 @@ def _is_owner(session: Session, user: User, event: Event) -> bool:
 
 
 def require_scanner(session: Session, user: User, event_id: uuid.UUID) -> Event:
-    """The event owner or a user assigned as staff to this event."""
+    """The event, if the user owns it or is assigned as staff to it.
+
+    Someone else's event answers 404 like a missing one, so a draft or private event is
+    never revealed by its UUID.
+    """
     event = repository.get_event(session, event_id)
-    if event is None:
+    if event is None or (
+        not _is_owner(session, user, event) and not repository.get_staff(session, event.id, user.id)
+    ):
         raise NotFoundError("Event not found")
-    if not _is_owner(session, user, event) and not repository.get_staff(session, event.id, user.id):
-        raise PermissionDeniedError("You are not assigned to this event")
     return event
 
 
@@ -103,6 +109,9 @@ def my_events(session: Session, user: User) -> list[MyEventOut]:
             status=event.status,
             start_at=event.start_at,
             end_at=event.end_at,
+            venue_name=event.venue.name,
+            venue_address=event.venue.address,
+            timezone=event.venue.timezone,
             is_owner=is_owner,
         )
         for event, is_owner in repository.list_scannable_events(session, user.id)
@@ -143,6 +152,12 @@ def scan(session: Session, user: User, event_id: uuid.UUID, qr_token: str) -> Sc
     check_in_records is a second guard if the lock is ever bypassed.
     """
     event = require_scanner(session, user, event_id)
+    # Nobody gets in to a cancelled event (cancel does not cancel the tickets yet, BE-19).
+    # A draft event has no holding orders (unpublish refuses them), so its QRs are invalid.
+    if event.status == EventStatus.CANCELLED:
+        return _out(session, event.id, ScanResult.EVENT_CANCELLED)
+    if event.status == EventStatus.DRAFT:
+        return _out(session, event.id, ScanResult.INVALID)
     token = qr_token.strip()
 
     if token.startswith(CAMPAIGN_PREFIX):
@@ -171,12 +186,21 @@ def scan(session: Session, user: User, event_id: uuid.UUID, qr_token: str) -> Sc
 
 
 def undo_check_in(session: Session, user: User, ticket_id: uuid.UUID) -> ScannedTicket:
-    """Reverse a mistaken scan: the record stays (is_reversed) and the ticket is valid again."""
+    """Reverse a mistaken scan: the record stays (is_reversed) and the ticket is valid again.
+
+    Access is checked before the ticket row is locked, so an outsider cannot hold locks on
+    other events' tickets. Unknown and foreign tickets give the same 404.
+    """
+    event_id = repository.event_id_of_ticket(session, ticket_id)
+    try:
+        if event_id is None:
+            raise NotFoundError("Ticket not found")
+        require_scanner(session, user, event_id)
+    except NotFoundError as exc:
+        raise NotFoundError("Ticket not found") from exc
     ticket = repository.get_ticket_for_update(session, ticket_id)
-    if ticket is None:
+    if ticket is None:  # deleted in between; tickets are not deleted by the app
         raise NotFoundError("Ticket not found")
-    event_id = repository.ticket_event_id(session, ticket)
-    require_scanner(session, user, event_id)
     record = repository.active_check_in(session, ticket.id)
     if ticket.status != TicketStatus.CHECKED_IN or record is None:
         raise BusinessRuleError("This ticket is not checked in")
@@ -201,10 +225,11 @@ def undo_check_in(session: Session, user: User, ticket_id: uuid.UUID) -> Scanned
 
 
 def search_attendees(
-    session: Session, user: User, event_id: uuid.UUID, q: str | None, limit: int
-) -> list[AttendeeRow]:
+    session: Session, user: User, event_id: uuid.UUID, q: str | None, limit: int, offset: int
+) -> AttendeePage:
     event = require_scanner(session, user, event_id)
-    return [
+    rows, total = repository.search_attendees(session, event.id, q, limit, offset)
+    items = [
         AttendeeRow(
             ticket_id=ticket.id,
             attendee_name=attendee.name,
@@ -212,10 +237,9 @@ def search_attendees(
             ticket_type=ticket_type,
             status=ticket.status,
         )
-        for ticket, attendee, ticket_type in repository.search_attendees(
-            session, event.id, q, limit
-        )
+        for ticket, attendee, ticket_type in rows
     ]
+    return AttendeePage(items=items, total=total, limit=limit, offset=offset)
 
 
 def stats(session: Session, user: User, event_id: uuid.UUID) -> StatsOut:

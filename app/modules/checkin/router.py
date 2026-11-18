@@ -5,7 +5,7 @@ from fastapi import APIRouter, Query, status
 
 from app.modules.checkin import service
 from app.modules.checkin.schemas import (
-    AttendeeRow,
+    AttendeePage,
     MyEventOut,
     ScanIn,
     ScannedTicket,
@@ -60,7 +60,7 @@ def undo(ticket_id: uuid.UUID, user: CurrentUser, session: SessionDep) -> Scanne
 
 
 @checkin_router.get(
-    "/events/{event_id}/attendees", response_model=list[AttendeeRow], summary="Find a guest"
+    "/events/{event_id}/attendees", response_model=AttendeePage, summary="Find a guest"
 )
 def attendees(
     event_id: uuid.UUID,
@@ -68,8 +68,9 @@ def attendees(
     session: SessionDep,
     q: str | None = None,
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
-) -> list[AttendeeRow]:
-    return service.search_attendees(session, user, event_id, q, limit)
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> AttendeePage:
+    return service.search_attendees(session, user, event_id, q, limit, offset)
 
 
 @checkin_router.get("/events/{event_id}/stats", response_model=StatsOut, summary="Door stats")
