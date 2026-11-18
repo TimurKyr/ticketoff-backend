@@ -18,8 +18,9 @@ from app.modules.events.schemas import (
     EventUpdate,
     VenueOut,
 )
-from app.modules.identity.dependencies import require_organizer
+from app.modules.identity.dependencies import CurrentUser, require_organizer
 from app.modules.identity.models import OrganizerProfile
+from app.modules.payments import service as payments_service
 
 SessionDep = Annotated[Session, Depends(get_session)]
 OrganizerDep = Annotated[OrganizerProfile, Depends(require_organizer)]
@@ -99,9 +100,14 @@ def unpublish_event(event: OwnedEventDep, session: SessionDep) -> Event:
     return service.unpublish_event(session, event)
 
 
-@events_router.post("/{event_id}/cancel", response_model=EventOut, summary="Cancel an event")
-def cancel_event(event: OwnedEventDep, session: SessionDep) -> Event:
-    return service.cancel_event(session, event)
+@events_router.post(
+    "/{event_id}/cancel",
+    response_model=EventOut,
+    summary="Cancel an event: its orders are cancelled and paid ones refunded",
+)
+def cancel_event(event: OwnedEventDep, user: CurrentUser, session: SessionDep) -> Event:
+    """One transaction: free and pending orders cancelled, paid orders fully refunded."""
+    return payments_service.cancel_event_with_orders(session, event, user)
 
 
 @organizer_router.get("", response_model=EventPage, summary="My events, optionally by bucket")

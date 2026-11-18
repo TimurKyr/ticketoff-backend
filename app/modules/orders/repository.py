@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 
 from sqlalchemy import ColumnElement, and_, func, or_, select
 from sqlalchemy.engine import Row as ResultRow
-from sqlalchemy.orm import Session, joinedload, selectinload
+from sqlalchemy.orm import Session, contains_eager, joinedload, selectinload
 
 from app.core.config import get_settings
 from app.modules.events.models import Event, Row, Seat
@@ -178,10 +178,12 @@ def add(session: Session, ticket_type: TicketType) -> None:
 
 
 # Lock order for anything that changes inventory: the event row first, then the rest
-# (its ticket types in id order, or the order being paid/cancelled and then that order's
-# tickets). Every caller (free registration, paid checkout, pay, cancel) must follow it,
-# so concurrent transactions never wait on each other in a cycle. Check-in locks a single
-# ticket row and nothing after it, so it cannot close a cycle either.
+# (its ticket types in id order, or the order being paid/cancelled/refunded and then that
+# order's tickets, or, for an event cancel, all of its orders and then all of its tickets,
+# each in id order). Every caller (free registration, paid checkout, pay, cancel, refund,
+# event cancel) must follow it, so concurrent transactions never wait on each other in a
+# cycle. Check-in locks a single ticket row and nothing after it, so it cannot close a
+# cycle either.
 
 
 def lock_event(session: Session, event_id: uuid.UUID) -> Event | None:
@@ -322,3 +324,40 @@ def lock_order_tickets(session: Session, order_id: uuid.UUID) -> list[Ticket]:
         .execution_options(populate_existing=True)
     )
     return list(session.scalars(stmt))
+
+
+def lock_event_orders(session: Session, event_id: uuid.UUID) -> list[Order]:
+    """SELECT ... FOR UPDATE: every order of the event, in id order (event cancel).
+
+    Take it after lock_event. Pay, cancel and refund lock the event first as well, so they
+    wait for the whole cancel and then see the new statuses.
+    """
+    stmt = (
+        select(Order)
+        .where(Order.event_id == event_id)
+        .order_by(Order.id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    return list(session.scalars(stmt))
+
+
+def lock_event_tickets(session: Session, event_id: uuid.UUID) -> list[Ticket]:
+    """SELECT ... FOR UPDATE OF tickets: every ticket of the event, in id order.
+
+    Take it after lock_event_orders. Each ticket comes with its order_item loaded (no lock
+    on order_items), so callers can group tickets by order without extra queries. A scan
+    at the door locks the ticket row it checks in, so it waits for the cancel and then sees
+    the new ticket status.
+    """
+    stmt = (
+        select(Ticket)
+        .join(OrderItem, OrderItem.id == Ticket.order_item_id)
+        .join(Order, Order.id == OrderItem.order_id)
+        .where(Order.event_id == event_id)
+        .options(contains_eager(Ticket.order_item))
+        .order_by(Ticket.id)
+        .with_for_update(of=Ticket)
+        .execution_options(populate_existing=True)
+    )
+    return list(session.scalars(stmt).unique())

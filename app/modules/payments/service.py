@@ -8,6 +8,8 @@ tickets; failure leaves the order pending so the buyer can retry until it expire
 """
 
 import uuid
+from collections import defaultdict
+from collections.abc import Sequence
 from datetime import UTC, datetime
 
 from sqlalchemy.orm import Session
@@ -15,6 +17,7 @@ from sqlalchemy.orm import Session
 from app.common.errors import BusinessRuleError, NotFoundError
 from app.core.config import get_settings
 from app.modules.audit import service as audit
+from app.modules.events import service as events_service
 from app.modules.events.enums import EventStatus
 from app.modules.events.models import Event
 from app.modules.identity.enums import PayoutAccountStatus, VerificationStatus
@@ -24,7 +27,7 @@ from app.modules.ops.models import Notification
 from app.modules.orders import repository as orders_repository
 from app.modules.orders import service as orders_service
 from app.modules.orders.enums import OrderStatus, TicketStatus
-from app.modules.orders.models import Order
+from app.modules.orders.models import Order, Ticket
 from app.modules.orders.service import CLOSED_EVENT_STATUSES
 from app.modules.payments import repository
 from app.modules.payments.enums import PaymentPurpose, PaymentStatus, RefundStatus
@@ -262,6 +265,31 @@ _NOT_REFUNDABLE = {
 }
 
 
+def refund_locked_order(
+    session: Session, order: Order, tickets: Sequence[Ticket], reason: str | None
+) -> Refund:
+    """Fully refund a paid order: a succeeded Refund of its payment, and the order and every
+    given ticket (used ones too) become refunded. Nothing else.
+
+    The caller has locked the event, the order and these tickets, and does the checks, the
+    notification, the audit row and the commit (refund_order, or the event-cancel cascade).
+    """
+    payment = repository.get_succeeded_order_payment(session, order.id)
+    if payment is None:  # paid is only ever set together with a succeeded payment
+        raise RuntimeError(f"Paid order {order.id} has no succeeded payment")
+    refund = Refund(
+        payment_id=payment.id,
+        amount_kzt=payment.amount_kzt,  # full refunds only
+        status=RefundStatus.SUCCEEDED,  # the model default is pending
+        reason=reason,
+    )
+    repository.add_refund(session, refund)
+    order.status = OrderStatus.REFUNDED
+    for ticket in tickets:
+        ticket.status = TicketStatus.REFUNDED
+    return refund
+
+
 def refund_order(
     session: Session,
     user: User,
@@ -292,20 +320,9 @@ def refund_order(
         raise BusinessRuleError(_NOT_REFUNDABLE[order.status])
     if order.status != OrderStatus.PAID:
         raise BusinessRuleError("Only paid orders can be refunded")
-    payment = repository.get_succeeded_order_payment(session, order.id)
-    if payment is None:  # paid is only ever set together with a succeeded payment
-        raise RuntimeError(f"Paid order {order.id} has no succeeded payment")
 
-    refund = Refund(
-        payment_id=payment.id,
-        amount_kzt=payment.amount_kzt,  # full refunds only
-        status=RefundStatus.SUCCEEDED,  # the model default is pending
-        reason=data.reason,
-    )
-    repository.add_refund(session, refund)
-    order.status = OrderStatus.REFUNDED
-    for ticket in tickets:  # valid and checked_in alike
-        ticket.status = TicketStatus.REFUNDED
+    refund = refund_locked_order(session, order, tickets, data.reason)
+    payment = refund.payment
     repository.add_notification(
         session,
         Notification(
@@ -347,6 +364,67 @@ def refund_order(
         ),
         order=orders_service.order_out(order),
     )
+
+
+# --- cancelling an event with its orders (BE-19) ---
+
+EVENT_CANCEL_REFUND_REASON = "Event cancelled"
+
+
+def cancel_event_with_orders(session: Session, event: Event, user: User) -> Event:
+    """Cancel the organizer's event and, in the same transaction, every order on it.
+
+    free_confirmed -> cancelled (tickets too, checked-in ones included: the event is off);
+    paid -> full simulated refund, order and tickets refunded; pending (fresh or expired)
+    -> cancelled; already cancelled or refunded -> untouched. One "event.cancelled" audit
+    row with the counts, no per-order rows and no notifications (BE-18 tells ticket
+    holders). Ownership is checked by the route.
+
+    Locks, in the repository lock order: the event (mark_cancelled), then all of its orders,
+    then all of its tickets. Checkout, registration, pay, cancel and refund lock the event
+    first too, so they wait and then see the cancelled event; a scan at the door locks the
+    ticket row, so it waits and then sees the new ticket status.
+    """
+    events_service.mark_cancelled(session, event)  # 409 unless draft/published
+    orders = orders_repository.lock_event_orders(session, event.id)
+    tickets_by_order: dict[uuid.UUID, list[Ticket]] = defaultdict(list)
+    for ticket in orders_repository.lock_event_tickets(session, event.id):
+        tickets_by_order[ticket.order_item.order_id].append(ticket)
+
+    cancelled_orders = refunded_orders = refunded_kzt = pending_cancelled = ticket_count = 0
+    for order in orders:
+        tickets = tickets_by_order[order.id]
+        if order.status == OrderStatus.FREE_CONFIRMED:
+            orders_service.cancel_locked_order(order, tickets)
+            cancelled_orders += 1
+        elif order.status == OrderStatus.PAID:
+            refund = refund_locked_order(session, order, tickets, EVENT_CANCEL_REFUND_REASON)
+            refunded_orders += 1
+            refunded_kzt += refund.amount_kzt
+        elif order.status == OrderStatus.PENDING:
+            orders_service.cancel_locked_order(order, tickets)  # no tickets yet
+            pending_cancelled += 1
+        else:  # cancelled or refunded already
+            continue
+        ticket_count += len(tickets)
+
+    audit.log(
+        session,
+        actor_user_id=user.id,
+        action_type="event.cancelled",
+        entity_type="event",
+        entity_id=event.id,
+        event_id=event.id,
+        details={
+            "cancelled_orders": cancelled_orders,
+            "refunded_orders": refunded_orders,
+            "refunded_kzt": refunded_kzt,
+            "pending_cancelled": pending_cancelled,
+            "ticket_count": ticket_count,
+        },
+    )
+    session.commit()  # event, orders, tickets, refunds and the audit row together
+    return event
 
 
 # --- organizer summary ---

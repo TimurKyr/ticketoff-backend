@@ -183,13 +183,18 @@ def unpublish_event(session: Session, event: Event) -> Event:
     return event
 
 
-def cancel_event(session: Session, event: Event) -> Event:
+def mark_cancelled(session: Session, event: Event) -> None:
+    """Lock the event and set it cancelled, if it is a draft or published. No commit.
+
+    The one place for the "only draft/published" rule. The caller
+    (payments.service.cancel_event_with_orders) cancels and refunds the event's orders in
+    the same transaction and commits once. The event lock is taken first, as in every
+    other inventory change, so new orders and payments wait and then see the cancel.
+    """
     _lock(session, event)
     if event.status not in (EventStatus.DRAFT, EventStatus.PUBLISHED):
         raise BusinessRuleError(f"A {event.status.value} event cannot be cancelled")
     event.status = EventStatus.CANCELLED
-    session.commit()  # TODO(BE-19): audit log; BE-18: notify ticket holders.
-    return event
 
 
 def get_public_event(session: Session, event_id: uuid.UUID) -> Event:
