@@ -3,11 +3,12 @@ from collections.abc import Iterable
 from datetime import datetime, timedelta
 
 from sqlalchemy import ColumnElement, and_, func, or_, select
+from sqlalchemy.engine import Row as ResultRow
 from sqlalchemy.orm import Session, joinedload, selectinload
 
 from app.core.config import get_settings
 from app.modules.events.models import Event, Row, Seat
-from app.modules.orders.enums import OrderStatus
+from app.modules.orders.enums import OrderStatus, TicketStatus
 from app.modules.orders.models import Order, OrderItem, Ticket, TicketType
 
 
@@ -51,10 +52,17 @@ def holding_orders_clause(now: datetime, hold: timedelta) -> ColumnElement[bool]
     than `hold`: an abandoned checkout releases its tickets on its own, without a cleanup
     job. Cancelled and refunded orders never do.
     """
-    return or_(
-        Order.status.in_([OrderStatus.PAID, OrderStatus.FREE_CONFIRMED]),
-        and_(Order.status == OrderStatus.PENDING, Order.created_at > now - hold),
-    )
+    return or_(confirmed_orders_clause(), reserving_orders_clause(now, hold))
+
+
+def confirmed_orders_clause() -> ColumnElement[bool]:
+    """Orders whose tickets are sold for good (paid or free-confirmed)."""
+    return Order.status.in_([OrderStatus.PAID, OrderStatus.FREE_CONFIRMED])
+
+
+def reserving_orders_clause(now: datetime, hold: timedelta) -> ColumnElement[bool]:
+    """Pending checkouts still inside their hold. The hold runs from orders.created_at."""
+    return and_(Order.status == OrderStatus.PENDING, Order.created_at > now - hold)
 
 
 def sold_quantities(
@@ -86,6 +94,67 @@ def held_quantity_for_event(session: Session, event_id: uuid.UUID, now: datetime
         .where(TicketType.event_id == event_id, holding_orders_clause(now, checkout_hold()))
     )
     return int(session.scalar(stmt) or 0)
+
+
+def inventory_rows(session: Session, event_id: uuid.UUID, now: datetime) -> list[ResultRow]:
+    """Per ticket type of the event (hidden ones included): quantity_total, sold, reserved
+    and ticket counts by status, in one query.
+
+    Quantities and ticket counts are aggregated separately and outer-joined onto
+    ticket_types: summing order_items.quantity over a join with tickets would count each
+    item once per ticket. Types without any orders get zeros.
+    sold + reserved uses the same clauses as sold_quantities (holding_orders_clause).
+    """
+    hold = checkout_hold()
+    quantities = (
+        select(
+            OrderItem.ticket_type_id,
+            func.sum(OrderItem.quantity).filter(confirmed_orders_clause()).label("sold"),
+            func.sum(OrderItem.quantity)
+            .filter(reserving_orders_clause(now, hold))
+            .label("reserved"),
+        )
+        .join(Order, Order.id == OrderItem.order_id)
+        .where(Order.event_id == event_id)
+        .group_by(OrderItem.ticket_type_id)
+        .subquery()
+    )
+
+    def by_status(status: TicketStatus, label: str):
+        return func.count(Ticket.id).filter(Ticket.status == status).label(label)
+
+    tickets = (
+        select(
+            OrderItem.ticket_type_id,
+            by_status(TicketStatus.CHECKED_IN, "checked_in"),
+            by_status(TicketStatus.REFUNDED, "refunded"),
+            by_status(TicketStatus.CANCELLED, "cancelled"),
+        )
+        .select_from(Ticket)
+        .join(OrderItem, OrderItem.id == Ticket.order_item_id)
+        .join(Order, Order.id == OrderItem.order_id)
+        .where(Order.event_id == event_id)
+        .group_by(OrderItem.ticket_type_id)
+        .subquery()
+    )
+    stmt = (
+        select(
+            TicketType.id.label("ticket_type_id"),
+            TicketType.name,
+            TicketType.quantity_total,
+            func.coalesce(quantities.c.sold, 0).label("sold"),
+            func.coalesce(quantities.c.reserved, 0).label("reserved"),
+            func.coalesce(tickets.c.checked_in, 0).label("checked_in"),
+            func.coalesce(tickets.c.refunded, 0).label("refunded"),
+            func.coalesce(tickets.c.cancelled, 0).label("cancelled"),
+        )
+        .outerjoin(quantities, quantities.c.ticket_type_id == TicketType.id)
+        .outerjoin(tickets, tickets.c.ticket_type_id == TicketType.id)
+        .where(TicketType.event_id == event_id)
+        # Same order as the owner's ticket type list.
+        .order_by(TicketType.price_kzt, TicketType.name)
+    )
+    return list(session.execute(stmt))
 
 
 def total_quantity_for_event(
