@@ -186,10 +186,14 @@ def test_cancel_cascades_to_every_order(
     assert [r.reason for r in _refunds(db_session, stocked.already_refunded)] == ["Earlier"]
 
     # Exactly one new audit row, the event's, with exact counts; no per-order rows.
-    rows = db_session.scalars(
-        select(AuditLog).where(AuditLog.event_id == event.id).order_by(AuditLog.created_at)
+    # Picked by action_type, not by position: the whole test runs in one transaction, so every
+    # row has the same created_at (now()) and ordering by it is random.
+    assert _count(db_session, AuditLog, AuditLog.event_id == event.id) == audit_before + 1
+    [row] = db_session.scalars(
+        select(AuditLog).where(
+            AuditLog.event_id == event.id, AuditLog.action_type == "event.cancelled"
+        )
     ).all()
-    [row] = rows[audit_before:]
     assert (row.action_type, row.entity_type, row.entity_id, row.actor_user_id) == (
         "event.cancelled",
         "event",
@@ -203,7 +207,6 @@ def test_cancel_cascades_to_every_order(
         "pending_cancelled": 2,
         "ticket_count": 5,  # 2 free + 2 + 1 paid
     }
-    assert len(rows) == audit_before + 1
     # No notifications from the cascade (BE-18 sends the emails).
     assert _count(db_session, Notification) == notifications_before
 

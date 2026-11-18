@@ -2,13 +2,12 @@
 
 from types import SimpleNamespace
 
-import cv2
-import numpy as np
 import pytest
 
 from app.modules.promotions.enums import DiscountType
 from app.modules.promotions.qr_png import render_qr_png
 from app.modules.promotions.service import discount_for
+from tests.qr import decode_qr_png
 
 
 def campaign(kind: DiscountType, value: int) -> SimpleNamespace:
@@ -33,8 +32,7 @@ def test_discount_for(kind: DiscountType, value: int, total: int, expected: int)
 
 
 def decode(png: bytes) -> str:
-    image = cv2.imdecode(np.frombuffer(png, np.uint8), cv2.IMREAD_COLOR)
-    return cv2.QRCodeDetector().detectAndDecode(image)[0]
+    return decode_qr_png(png)
 
 
 def test_png_encodes_exactly_the_token() -> None:
