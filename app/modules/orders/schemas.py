@@ -205,7 +205,11 @@ class CheckoutCreate(RegistrationCreate):
 
     One attendee per ticket, matched in item order. The client never sends prices; unknown
     fields such as a price are ignored and the total comes from the ticket types.
+
+    `promo_code` is optional (BE-16): a valid code lowers what the buyer pays.
     """
+
+    promo_code: str | None = Field(default=None, min_length=1, max_length=64)
 
 
 class OrderItemOut(BaseModel):
@@ -232,7 +236,9 @@ class OrderOut(BaseModel):
     id: uuid.UUID
     event_id: uuid.UUID
     status: OrderStatus
+    # Before the discount; the buyer pays total_kzt - discount_kzt.
     total_kzt: int
+    discount_kzt: int = 0
     items: list[OrderItemOut]
     tickets: list[TicketOut]
     # Pending (unpaid) orders only: after this the order no longer holds its tickets.
