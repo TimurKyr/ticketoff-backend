@@ -17,6 +17,8 @@ from app.modules.orders.pdf import TicketPdfData, render_ticket_pdf
 from app.modules.orders.qr import issue_ticket_token
 from app.modules.orders.schemas import (
     CheckoutCreate,
+    EventInventoryOut,
+    InventoryTicketTypeOut,
     OrderOut,
     PublicTicketTypeOut,
     RegistrationCreate,
@@ -135,6 +137,47 @@ def create_ticket_type(
     session.commit()
     session.refresh(ticket_type)
     return _to_out(ticket_type, sold=0)
+
+
+def get_inventory(session: Session, event: Event, now: datetime | None = None) -> EventInventoryOut:
+    """Inventory of the organizer's event (ownership is checked by the route).
+
+    Order-based, like checkout: sold + reserved per type is exactly TicketTypeOut.sold, and
+    available is exactly TicketTypeOut.available, so the two endpoints always agree.
+    Ticket statuses (checked_in, refunded, cancelled) are extra counts from tickets.
+    """
+    now = now or datetime.now(UTC)  # one clock reading for every number below
+    types = [
+        InventoryTicketTypeOut(
+            ticket_type_id=row.ticket_type_id,
+            name=row.name,
+            quantity_total=row.quantity_total,
+            sold=row.sold,
+            reserved=row.reserved,
+            available=max(0, row.quantity_total - row.sold - row.reserved),
+            checked_in=row.checked_in,
+            refunded=row.refunded,
+            cancelled=row.cancelled,
+        )
+        for row in repository.inventory_rows(session, event.id, now)
+    ]
+    sold = sum(t.sold for t in types)
+    reserved = sum(t.reserved for t in types)
+    available = sum(t.available for t in types)
+    if event.capacity is not None:
+        # Checkout also refuses orders beyond capacity - held, whatever the types allow.
+        available = min(available, max(0, event.capacity - (sold + reserved)))
+    return EventInventoryOut(
+        event_id=event.id,
+        capacity=event.capacity,
+        sold=sold,
+        reserved=reserved,
+        available=available,
+        checked_in=sum(t.checked_in for t in types),
+        refunded=sum(t.refunded for t in types),
+        cancelled=sum(t.cancelled for t in types),
+        ticket_types=types,
+    )
 
 
 def list_ticket_types(

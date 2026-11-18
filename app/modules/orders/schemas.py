@@ -110,8 +110,47 @@ class TicketTypeOut(BaseModel):
     sales_start_at: datetime | None
     sales_end_at: datetime | None
     is_hidden: bool
-    sold: int
+    sold: int = Field(
+        description=(
+            "Tickets held: paid and free-confirmed orders plus pending checkouts still inside"
+            " their hold (reservations included). GET /events/{event_id}/inventory splits it"
+            " into sold and reserved."
+        )
+    )
     available: int
+
+
+class InventoryTicketTypeOut(BaseModel):
+    """One ticket type in the organizer's inventory summary."""
+
+    ticket_type_id: uuid.UUID
+    name: str
+    quantity_total: int
+    sold: int = Field(description="Paid and free-confirmed orders (order quantities).")
+    reserved: int = Field(description="Pending checkouts still inside their hold.")
+    available: int = Field(description="max(0, quantity_total - sold - reserved)")
+    checked_in: int = Field(description="Tickets with status checked_in (a subset of sold).")
+    refunded: int = Field(description="Tickets with status refunded.")
+    cancelled: int = Field(description="Tickets with status cancelled.")
+
+
+class EventInventoryOut(BaseModel):
+    """Inventory of one event: per ticket type (hidden ones included) and event totals."""
+
+    event_id: uuid.UUID
+    capacity: int | None
+    sold: int
+    reserved: int
+    available: int = Field(
+        description=(
+            "Sum of the ticket types' available, capped at capacity - (sold + reserved)"
+            " when the event has a capacity; never below 0."
+        )
+    )
+    checked_in: int
+    refunded: int
+    cancelled: int
+    ticket_types: list[InventoryTicketTypeOut]
 
 
 class PublicTicketTypeOut(BaseModel):

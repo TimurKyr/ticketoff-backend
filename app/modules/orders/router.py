@@ -9,6 +9,7 @@ from app.modules.identity.dependencies import CurrentUser, SessionDep
 from app.modules.orders import service
 from app.modules.orders.schemas import (
     CheckoutCreate,
+    EventInventoryOut,
     OrderOut,
     PublicTicketTypeOut,
     RegistrationCreate,
@@ -50,6 +51,15 @@ def create_ticket_type(
 )
 def list_ticket_types(event: OwnedEventDep, session: SessionDep) -> list[TicketTypeOut]:
     return service.list_ticket_types(session, event.organizer_id, event.id)
+
+
+@ticket_types_router.get(
+    "/{event_id}/inventory",
+    response_model=EventInventoryOut,
+    summary="Inventory of my event: sold, reserved, available and ticket statuses",
+)
+def get_inventory(event: OwnedEventDep, session: SessionDep) -> EventInventoryOut:
+    return service.get_inventory(session, event)
 
 
 # Declared before any GET /{ticket_type_id} route, so "public" is never parsed as an id.
