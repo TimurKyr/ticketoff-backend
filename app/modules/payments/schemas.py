@@ -52,7 +52,12 @@ class PaymentSummaryOut(BaseModel):
     gross_kzt: int
     fees_kzt: int
     refunds_kzt: int
-    estimated_payout_kzt: int
+    estimated_payout_kzt: int = Field(
+        description=(
+            "gross_kzt - fees_kzt - refunds_kzt. Can be negative (minus the fee) after full"
+            " refunds: processing fees on refunded sales are not returned."
+        )
+    )
     fee_percent: int
     currency: Literal["KZT"] = "KZT"
     is_simulated: Literal[True] = True

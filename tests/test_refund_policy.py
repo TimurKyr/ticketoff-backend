@@ -69,6 +69,11 @@ def test_policy_is_saved_and_shown_on_the_public_page(
     event = created.json()
     assert event["refund_policy"] == POLICY
 
+    # Publishing needs a visible ticket type (BE-11, #17).
+    ticket_type = {"name": "Free", "kind": "free", "price_kzt": 0, "quantity_total": 10}
+    assert (
+        api.post(f"/events/{event['id']}/ticket-types", json=ticket_type, headers=organizer)
+    ).status_code == 201
     assert api.post(f"/events/{event['id']}/publish", headers=organizer).status_code == 200
     public = api.get(f"/events/{event['id']}")  # no login: what a buyer sees
     assert public.status_code == 200

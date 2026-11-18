@@ -379,7 +379,7 @@ def test_duplicate_copies_configuration_into_a_new_draft(
 def test_duplicate_copies_ticket_types_without_sales(
     client: TestClient, org: Headers, db: Session, make_user: UserFactory, venue: Venue
 ) -> None:
-    original = _create(client, org, venue)
+    original = _create(client, org, venue, refund_policy="Refund up to 24 h before the start.")
     sales_end = _iso(5)
     vip = _add_type(
         client,
@@ -401,6 +401,7 @@ def test_duplicate_copies_ticket_types_without_sales(
     db.commit()
 
     copy = client.post(f"/events/{original['id']}/duplicate", headers=org).json()
+    assert copy["refund_policy"] == "Refund up to 24 h before the start."
     types = client.get(f"/events/{copy['id']}/ticket-types", headers=org).json()
 
     by_name = {t["name"]: t for t in types}

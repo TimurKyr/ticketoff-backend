@@ -267,7 +267,6 @@ def refund_order(
     user: User,
     order_id: uuid.UUID,
     data: RefundIn,
-    now: datetime | None = None,
 ) -> RefundResultOut:
     """Fully refund a paid order (simulated). Only the event's organizer may do it.
 
@@ -287,7 +286,7 @@ def refund_order(
     orders_repository.lock_event(session, order.event_id)
     order = orders_repository.lock_order(session, order_id)
     tickets = orders_repository.lock_order_tickets(session, order.id)
-    now = now or datetime.now(UTC)  # read after the locks; no start-time rule for refunds
+    # No time rules for refunds (allowed after the event started), so no clock is read.
 
     if order.status in _NOT_REFUNDABLE:
         raise BusinessRuleError(_NOT_REFUNDABLE[order.status])
