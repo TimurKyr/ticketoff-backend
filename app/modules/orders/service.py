@@ -510,6 +510,18 @@ _ALREADY_CLOSED = {
 }
 
 
+def cancel_locked_order(order: Order, tickets: Sequence[Ticket]) -> None:
+    """The order and every given ticket become cancelled. Nothing else.
+
+    The caller has locked the event, the order and these tickets, and does the checks, the
+    audit row and the commit (cancel_order, or the event-cancel cascade, which also cancels
+    checked-in tickets because the event itself is called off).
+    """
+    order.status = OrderStatus.CANCELLED
+    for ticket in tickets:
+        ticket.status = TicketStatus.CANCELLED
+
+
 def _canceller(order: Order, user: User) -> str | None:
     """'buyer', 'organizer' (owner of the order's event), or None for anyone else.
 
@@ -555,9 +567,7 @@ def cancel_order(
     if any(ticket.status == TicketStatus.CHECKED_IN for ticket in tickets):
         raise BusinessRuleError("A ticket of this order was already used")
 
-    order.status = OrderStatus.CANCELLED
-    for ticket in tickets:  # all valid here: checked_in was refused above
-        ticket.status = TicketStatus.CANCELLED
+    cancel_locked_order(order, tickets)  # all valid here: checked_in was refused above
     audit.log(
         session,
         actor_user_id=user.id,
