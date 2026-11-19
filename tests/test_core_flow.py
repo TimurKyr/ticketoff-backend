@@ -8,14 +8,13 @@ door: checked_in, then already_used; the campaign QR (bare token and link) is re
 import uuid
 from datetime import UTC, datetime, timedelta
 
-import cv2
-import numpy as np
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from app.modules.events.models import Venue
 from tests.markers import postgres_only
+from tests.qr import decode_qr_png
 
 pytestmark = postgres_only
 
@@ -36,12 +35,6 @@ def _account(api: TestClient, role: str) -> tuple[str, dict[str, str]]:
 def _ok(response, status: int = 200) -> dict:
     assert response.status_code == status, response.text
     return response.json()
-
-
-def _decode_png(content: bytes) -> str:
-    image = cv2.imdecode(np.frombuffer(content, np.uint8), cv2.IMREAD_COLOR)
-    text, _, _ = cv2.QRCodeDetector().detectAndDecode(image)
-    return text
 
 
 def test_core_flow(session_api: TestClient, db_session: Session) -> None:
@@ -108,7 +101,7 @@ def test_core_flow(session_api: TestClient, db_session: Session) -> None:
         headers=organizer,
     )
     assert qr_png.status_code == 200
-    campaign_link = _decode_png(qr_png.content)
+    campaign_link = decode_qr_png(qr_png.content)
     assert campaign_link.endswith(f"/events/{event_id}?promo={code['qr_token']}")
 
     # Buyer: the event is public, the code checks out, checkout with it, simulated payment.
@@ -158,5 +151,8 @@ def test_core_flow(session_api: TestClient, db_session: Session) -> None:
     assert stats["checked_in"] == 1
 
 
+# TODO(BE-17): the buyer opens a support case about the order and the organizer answers.
+# Write this step when the support API (BE-17) is merged; until then it is skipped, not failed.
+@pytest.mark.skip(reason="BE-17 support API not merged yet")
 def test_core_flow_support_case() -> None:
-    pytest.skip("TODO(BE-17): buyer opens a support case about the order; add when BE-17 lands")
+    raise NotImplementedError
