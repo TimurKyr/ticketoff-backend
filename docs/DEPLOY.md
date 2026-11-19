@@ -114,6 +114,22 @@ docker compose -f docker-compose.prod.yml exec -e DEMO_PASSWORD='<password>' api
   the container (copy out with `docker compose -f docker-compose.prod.yml cp api:/tmp/demo-qr .`).
 - `--reset-scans` makes the demo tickets that should be valid valid again after a scanner demo.
 
+## Platform admin
+
+`app/scripts/create_admin.py` creates a platform admin (the `/admin/*` API, BE-22). The password
+comes from `ADMIN_PASSWORD` or a hidden prompt (needs `-it`) and is never printed. Idempotent.
+
+```bash
+docker compose -f docker-compose.prod.yml exec -it api python -m app.scripts.create_admin <email>
+```
+
+If the email is already registered, the script refuses and changes nothing: registration is
+public and emails are not verified, so someone else may own that account. Only for an account
+you know is yours, `--promote-existing` makes it an admin and keeps its current password.
+
+Suspending a user (`/admin/users/{id}/suspend`) blocks their login and tokens only. The events of
+a suspended organizer keep selling; stop those with `/admin/events/{id}/suspend`.
+
 ## Current server
 
 Oracle Cloud Always Free, `VM.Standard.E2.1.Micro` (1 OCPU, 1 GB RAM + 2 GB swap), Ubuntu 24.04.

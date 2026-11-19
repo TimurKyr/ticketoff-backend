@@ -9,6 +9,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    false,
 )
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
@@ -106,6 +107,8 @@ class Event(Base):
         default=SeatingType.GENERAL,
     )
     paid_sales_active = Column(Boolean, nullable=False, default=False)
+    # A platform admin stopped new sales (BE-22). Existing tickets stay valid.
+    sales_suspended = Column(Boolean, nullable=False, default=False, server_default=false())
     # When the organizer accepted the paid-sales terms (activation checklist). NULL = not yet.
     paid_terms_accepted_at = Column(DateTime(timezone=True))
     capacity = Column(Integer)

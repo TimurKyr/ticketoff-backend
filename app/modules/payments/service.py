@@ -212,8 +212,10 @@ def pay_order(
     # Same clock and locked event row as the expiry check above.
     if now >= event.start_at:
         raise BusinessRuleError("Event has already started")
-    # Checked again at pay time, on the locked row: an admin may suspend paid sales (BE-22)
-    # after checkout.
+    # Checked again at pay time, on the locked row: an admin may suspend sales (BE-22)
+    # after checkout. The order stays pending and expires with its hold.
+    if event.sales_suspended:
+        raise BusinessRuleError(orders_service.SALES_SUSPENDED_MESSAGE)
     if event.status != EventStatus.PUBLISHED or not event.paid_sales_active:
         raise BusinessRuleError("Paid ticket sales are not active for this event")
 
