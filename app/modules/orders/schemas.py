@@ -14,6 +14,9 @@ from pydantic import (
 from app.modules.orders.enums import OrderStatus, TicketKind, TicketStatus
 
 DEFAULT_MAX_PER_ORDER = 10
+# Integer columns are 32-bit; the web form uses the same caps.
+QUANTITY_MAX = 1_000_000
+PRICE_KZT_MAX = 100_000_000
 
 
 def ticket_type_rule_error(
@@ -45,10 +48,10 @@ class TicketTypeCreate(BaseModel):
     name: str = Field(min_length=1)
     description: str | None = None
     kind: TicketKind = TicketKind.FREE
-    price_kzt: int = Field(default=0, ge=0)
-    quantity_total: int = Field(gt=0)
+    price_kzt: int = Field(default=0, ge=0, le=PRICE_KZT_MAX)
+    quantity_total: int = Field(gt=0, le=QUANTITY_MAX)
     # Omitted -> min(DEFAULT_MAX_PER_ORDER, quantity_total); explicit null -> no limit.
-    max_per_order: int | None = Field(default=None, ge=1)
+    max_per_order: int | None = Field(default=None, ge=1, le=QUANTITY_MAX)
     # Aware only: comparing naive and aware datetimes raises TypeError.
     sales_start_at: AwareDatetime | None = None
     sales_end_at: AwareDatetime | None = None
@@ -80,9 +83,9 @@ class TicketTypeUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1)
     description: str | None = None
     kind: TicketKind | None = None
-    price_kzt: int | None = Field(default=None, ge=0)
-    quantity_total: int | None = Field(default=None, gt=0)
-    max_per_order: int | None = Field(default=None, ge=1)
+    price_kzt: int | None = Field(default=None, ge=0, le=PRICE_KZT_MAX)
+    quantity_total: int | None = Field(default=None, gt=0, le=QUANTITY_MAX)
+    max_per_order: int | None = Field(default=None, ge=1, le=QUANTITY_MAX)
     sales_start_at: AwareDatetime | None = None
     sales_end_at: AwareDatetime | None = None
     is_hidden: bool | None = None

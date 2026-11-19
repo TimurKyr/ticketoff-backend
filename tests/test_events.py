@@ -162,6 +162,7 @@ def test_create_requires_organizer_profile(
         {"registration_closes_at": _iso(11)},  # registration closes after the start
         {"start_at": "2030-01-01T10:00:00"},  # no timezone
         {"capacity": 0},
+        {"capacity": 1_000_001},  # above the cap, would overflow the Integer column
         {"title": ""},
     ],
 )
@@ -190,6 +191,15 @@ def test_owner_can_edit_event(client: TestClient, org: Headers, venue: Venue) ->
     assert response.status_code == 200
     assert response.json()["title"] == "New title"
     assert response.json()["category"] == "music"  # untouched fields stay
+
+
+def test_edit_rejects_capacity_above_cap(client: TestClient, org: Headers, venue: Venue) -> None:
+    event = _create(client, org, venue)
+    url = f"/events/{event['id']}"
+
+    assert client.patch(url, json={"capacity": 1_000_001}, headers=org).status_code == 422
+    assert client.patch(url, json={"capacity": 9_999_999_999}, headers=org).status_code == 422
+    assert client.patch(url, json={"capacity": 1_000_000}, headers=org).status_code == 200
 
 
 def test_edit_rechecks_dates_against_stored_values(

@@ -3,7 +3,12 @@ from datetime import datetime
 import pytest
 from pydantic import ValidationError
 
-from app.modules.orders.schemas import TicketTypeCreate, TicketTypeUpdate
+from app.modules.orders.schemas import (
+    PRICE_KZT_MAX,
+    QUANTITY_MAX,
+    TicketTypeCreate,
+    TicketTypeUpdate,
+)
 
 BASE = {"name": "General", "kind": "paid", "price_kzt": 5000}
 
@@ -102,3 +107,44 @@ def test_aware_values_with_different_offsets_reject_inverted_window() -> None:
             sales_start_at="2026-11-01T08:00:00Z",
             sales_end_at="2026-11-01T12:00:00+05:00",
         )
+
+
+# --- upper bounds (32-bit Integer columns) ---
+
+
+def test_values_at_the_cap_are_accepted() -> None:
+    data = create(price_kzt=PRICE_KZT_MAX, quantity_total=QUANTITY_MAX, max_per_order=QUANTITY_MAX)
+
+    assert (data.price_kzt, data.quantity_total, data.max_per_order) == (
+        PRICE_KZT_MAX,
+        QUANTITY_MAX,
+        QUANTITY_MAX,
+    )
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"price_kzt": PRICE_KZT_MAX + 1, "quantity_total": 5},
+        {"quantity_total": QUANTITY_MAX + 1},
+        {"quantity_total": QUANTITY_MAX, "max_per_order": QUANTITY_MAX + 1},
+    ],
+)
+def test_create_rejects_values_above_the_cap(fields: dict) -> None:
+    with pytest.raises(ValidationError) as exc:
+        create(**fields)
+    assert "less_than_equal" in {e["type"] for e in exc.value.errors()}
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"price_kzt": PRICE_KZT_MAX + 1},
+        {"quantity_total": QUANTITY_MAX + 1},
+        {"max_per_order": QUANTITY_MAX + 1},
+    ],
+)
+def test_update_rejects_values_above_the_cap(fields: dict) -> None:
+    with pytest.raises(ValidationError) as exc:
+        TicketTypeUpdate.model_validate(fields)
+    assert {e["type"] for e in exc.value.errors()} == {"less_than_equal"}

@@ -387,6 +387,37 @@ def test_patch_null_for_required_field_is_422(
     assert patch(api, owner, event, ticket_type["id"], {"name": None}).status_code == 422
 
 
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"quantity_total": 1_000_001},
+        {"quantity_total": 1_000_000, "max_per_order": 1_000_001},
+        {"price_kzt": 100_000_001},
+        {"price_kzt": 9_999_999_999},
+    ],
+)
+def test_create_above_cap_is_422(
+    api: TestClient, owner: Organizer, event: Event, fields: dict
+) -> None:
+    assert create(api, owner, event, paid(**fields)).status_code == 422
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"quantity_total": 1_000_001},
+        {"max_per_order": 1_000_001},
+        {"price_kzt": 100_000_001},
+    ],
+)
+def test_patch_above_cap_is_422(
+    api: TestClient, owner: Organizer, event: Event, fields: dict
+) -> None:
+    ticket_type = created(api, owner, event, paid())
+
+    assert patch(api, owner, event, ticket_type["id"], fields).status_code == 422
+
+
 def test_no_delete_route(api: TestClient, owner: Organizer, event: Event) -> None:
     ticket_type = created(api, owner, event, paid())
 
