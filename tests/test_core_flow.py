@@ -8,7 +8,6 @@ door: checked_in, then already_used; the campaign QR (bare token and link) is re
 import uuid
 from datetime import UTC, datetime, timedelta
 
-import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
@@ -151,8 +150,84 @@ def test_core_flow(session_api: TestClient, db_session: Session) -> None:
     assert stats["checked_in"] == 1
 
 
-# TODO(BE-17): the buyer opens a support case about the order and the organizer answers.
-# Write this step when the support API (BE-17) is merged; until then it is skipped, not failed.
-@pytest.mark.skip(reason="BE-17 support API not merged yet")
-def test_core_flow_support_case() -> None:
-    raise NotImplementedError
+def test_core_flow_support_case(session_api: TestClient, db_session: Session) -> None:
+    """The buyer asks about their order; the organizer finds it in the inbox and answers."""
+    api = session_api
+    _, organizer = _account(api, "organizer")
+    buyer_email, buyer = _account(api, "buyer")
+    profile = {"display_name": "Support Flow"}
+    _ok(api.post("/organizer/profile", json=profile, headers=organizer), 201)
+    venue = Venue(name=f"Support Hall {uuid.uuid4().hex[:6]}", city="Алматы")
+    db_session.add(venue)
+    db_session.flush()
+    start = datetime.now(UTC) + timedelta(days=7)
+    event = _ok(
+        api.post(
+            "/events",
+            json={
+                "title": "Support flow event",
+                "venue_id": str(venue.id),
+                "start_at": start.isoformat(),
+                "capacity": 50,
+            },
+            headers=organizer,
+        ),
+        201,
+    )
+    ticket_type = _ok(
+        api.post(
+            f"/events/{event['id']}/ticket-types",
+            json={"name": "Free", "kind": "free", "price_kzt": 0, "quantity_total": 50},
+            headers=organizer,
+        ),
+        201,
+    )
+    _ok(api.post(f"/events/{event['id']}/publish", headers=organizer))
+    order = _ok(
+        api.post(
+            f"/events/{event['id']}/registrations",
+            json={
+                "items": [{"ticket_type_id": ticket_type["id"], "quantity": 1}],
+                "attendees": [{"name": "Support Buyer", "email": buyer_email}],
+            },
+            headers=buyer,
+        ),
+        201,
+    )
+
+    # The buyer asks about their order.
+    case = _ok(
+        api.post(
+            "/support/cases",
+            json={
+                "kind": "attendee",
+                "category": "ticket",
+                "body": "Where do I find my ticket?",
+                "order_id": order["id"],
+            },
+            headers=buyer,
+        ),
+        201,
+    )
+    assert (case["status"], case["event_id"]) == ("open", event["id"])
+
+    # The organizer sees it in the inbox and answers.
+    inbox = _ok(api.get("/support/inbox", headers=organizer))
+    assert case["id"] in {item["id"] for item in inbox["items"]}
+    _ok(
+        api.post(
+            f"/support/cases/{case['id']}/messages",
+            json={"body": "It is in My tickets."},
+            headers=organizer,
+        ),
+        201,
+    )
+
+    # The buyer sees the answer, the new status and a notification.
+    seen = _ok(api.get(f"/support/cases/{case['id']}", headers=buyer))
+    assert seen["status"] == "waiting_customer"
+    assert [m["body"] for m in seen["messages"] if m["sender_id"] != case["opened_by"]] == [
+        "It is in My tickets."
+    ]
+    types = {n["type"] for n in _ok(api.get("/notifications", headers=buyer))["items"]}
+    assert "support_reply" in types

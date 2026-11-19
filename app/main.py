@@ -29,6 +29,7 @@ from app.modules.orders.router import (
 )
 from app.modules.payments.router import activation_router, payments_router
 from app.modules.promotions.router import campaigns_router, promo_router
+from app.modules.support.router import router as support_router
 
 
 @asynccontextmanager
@@ -66,6 +67,7 @@ app.include_router(campaigns_router)
 app.include_router(promo_router)
 app.include_router(admin_router)
 app.include_router(notifications_router)
+app.include_router(support_router)
 
 
 @app.get("/health", tags=["health"])
