@@ -49,7 +49,11 @@ def unsuspend_event(event_id: uuid.UUID, admin: AdminDep, session: SessionDep) -
     "/users/{user_id}/suspend", response_model=AdminUserOut, summary="Block a user account"
 )
 def suspend_user(user_id: uuid.UUID, admin: AdminDep, session: SessionDep) -> User:
-    """Login and every token of the user answer 403. Not allowed on your own account (409)."""
+    """Login and every token of the user answer 403. Not allowed on your own account (409).
+
+    Account only: the events of a suspended organizer keep selling and their tickets stay
+    valid. Stop an event's sales separately with POST /admin/events/{event_id}/suspend.
+    """
     return service.set_user_suspended(session, admin, user_id, True)
 
 

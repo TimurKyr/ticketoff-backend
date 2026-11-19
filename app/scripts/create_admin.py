@@ -1,14 +1,22 @@
-"""Make a user a platform admin (BE-22).
+"""Create a platform admin account (BE-22).
 
     python -m app.scripts.create_admin <email>
+    python -m app.scripts.create_admin <email> --promote-existing
 
 On the server:
 
-    docker compose -f docker-compose.prod.yml exec api python -m app.scripts.create_admin <email>
+    docker compose -f docker-compose.prod.yml exec -it api \
+        python -m app.scripts.create_admin <email>
 
-An existing account (any role) is promoted; its password is not touched. A missing account
-is created: the password comes from ADMIN_PASSWORD or, without it, from a hidden prompt.
-The password is never printed. Idempotent: running it again on an admin changes nothing.
+By default it only creates a new account: the password comes from ADMIN_PASSWORD or, without
+it, from a hidden prompt, and is never printed. If the email is already registered it refuses:
+registration is public and emails are not verified, so anyone could have registered that
+address first and would otherwise become an admin with their own password.
+
+--promote-existing makes an existing account (any role) a platform admin and keeps its
+password. Use it only for an account you know is yours.
+
+Idempotent: running it again on an existing admin changes nothing.
 """
 
 import argparse
@@ -43,14 +51,28 @@ def _prompt_password() -> str:
     return password
 
 
-def run(session: Session, email: str, get_password: Callable[[], str]) -> str:
-    """Promote or create the user. Returns "created", "promoted" or "unchanged"."""
+def run(
+    session: Session,
+    email: str,
+    get_password: Callable[[], str],
+    *,
+    promote_existing: bool = False,
+) -> str:
+    """Create (or, with promote_existing, promote) the admin.
+
+    Returns "created", "promoted" or "unchanged".
+    """
     email = normalize_email(email)
     if "@" not in email:
         raise CreateAdminError(f"not an email: {email!r}")
     user = session.scalar(select(User).where(User.email == email))
     if user is not None and user.system_role == SystemRole.PLATFORM_ADMIN:
         return "unchanged"
+    if user is not None and not promote_existing:
+        raise CreateAdminError(
+            f"{email} is already registered; it was not changed. If this account is yours,"
+            " run again with --promote-existing (it keeps its current password)"
+        )
     if user is None:
         password = get_password()
         if len(password) < MIN_PASSWORD_LENGTH:
@@ -78,6 +100,11 @@ def run(session: Session, email: str, get_password: Callable[[], str]) -> str:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Make a user a platform admin.")
     parser.add_argument("email")
+    parser.add_argument(
+        "--promote-existing",
+        action="store_true",
+        help="make an already registered account an admin (keeps its password)",
+    )
     args = parser.parse_args(argv)
 
     from app.core.db import SessionLocal
@@ -87,7 +114,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     with SessionLocal() as session:
         try:
-            outcome = run(session, args.email, get_password)
+            outcome = run(session, args.email, get_password, promote_existing=args.promote_existing)
         except CreateAdminError as exc:
             print(f"create_admin failed: {exc}", file=sys.stderr)
             return 1
