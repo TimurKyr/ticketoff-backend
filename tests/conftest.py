@@ -5,7 +5,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 import app.modules.registry  # noqa: F401
-from app.core.db import engine
+from app.core.db import engine, get_session
 from app.main import app
 
 
@@ -36,3 +36,17 @@ def db_session() -> Iterator[Session]:
         session.close()
         transaction.rollback()
         connection.close()
+
+
+@pytest.fixture
+def session_api(db_session: Session) -> Iterator[TestClient]:
+    """The API on the test's own db_session: it sees rows the test made without committing
+    them, and everything it writes is rolled back with the test."""
+
+    def _session() -> Iterator[Session]:
+        yield db_session
+
+    app.dependency_overrides[get_session] = _session
+    with TestClient(app) as tc:
+        yield tc
+    app.dependency_overrides.clear()

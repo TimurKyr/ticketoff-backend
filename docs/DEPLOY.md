@@ -100,9 +100,11 @@ docker compose -f docker-compose.prod.yml exec -T db \
 ## Demo data
 
 `app/scripts/seed_demo.py` creates venues (Almaty, Astana), a demo organizer, scanner and buyer,
-three published events (free, paid with active paid sales, several ticket types) and demo tickets
-in every scanner state (valid, checked in, cancelled, refunded, another event). It is idempotent:
-running it again creates nothing.
+three published `Demo: ...` events (free, paid with active paid sales, several ticket types), a
+promo campaign with the code `DEMO20` (20% off) and demo tickets in every scanner state (valid,
+checked in, cancelled, refunded, bought with the promo code, another event). It is idempotent:
+running it again creates nothing; demo events from an older seed (titles without `Demo: `) are
+renamed, and tickets left valid by an interrupted run are brought to their demo status.
 
 ```bash
 docker compose -f docker-compose.prod.yml exec -e DEMO_PASSWORD='<password>' api python -m app.scripts.seed_demo
@@ -110,7 +112,8 @@ docker compose -f docker-compose.prod.yml exec -e DEMO_PASSWORD='<password>' api
 
 - `DEMO_PASSWORD` is the password of all demo accounts (and resets it on existing ones). Without
   it, new accounts get a random password that is printed once. Do not commit it.
-- `--print-tokens` prints the QR tokens; `--qr-dir /tmp/demo-qr` writes one PNG per ticket inside
+- `--print-tokens` prints the QR tokens and the promo link; `--qr-dir /tmp/demo-qr` writes one PNG
+  per ticket (and `promo-DEMO20.png`) inside
   the container (copy out with `docker compose -f docker-compose.prod.yml cp api:/tmp/demo-qr .`).
 - `--reset-scans` makes the demo tickets that should be valid valid again after a scanner demo.
 
