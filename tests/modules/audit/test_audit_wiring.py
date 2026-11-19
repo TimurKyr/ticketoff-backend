@@ -19,7 +19,7 @@ from app.modules.events.enums import EventStatus
 from app.modules.events.models import Event, Venue
 from app.modules.identity.models import OrganizerProfile, User
 from app.modules.identity.security import create_access_token
-from app.modules.ops.models import CheckInRecord
+from app.modules.ops.models import CheckInRecord, Notification
 from app.modules.orders import service as orders_service
 from app.modules.orders.models import Attendee, Order, OrderItem, Ticket, TicketType
 from app.modules.orders.schemas import RegistrationCreate, TicketOut
@@ -327,7 +327,9 @@ def _cleanup(ids: dict) -> None:
         s.execute(delete(Event).where(Event.id == ids["event"]))
         s.execute(delete(Venue).where(Venue.id == ids["venue"]))
         s.execute(delete(OrganizerProfile).where(OrganizerProfile.id == ids["organizer"]))
-        s.execute(delete(User).where(User.id.in_([ids["owner"], ids["buyer"]])))
+        users = [ids["owner"], ids["buyer"]]
+        s.execute(delete(Notification).where(Notification.user_id.in_(users)))  # BE-18
+        s.execute(delete(User).where(User.id.in_(users)))
         s.commit()
 
 

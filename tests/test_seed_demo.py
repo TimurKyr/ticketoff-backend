@@ -262,3 +262,21 @@ def test_qr_png_decodes_to_the_token(tmp_path: Path) -> None:
     seed_demo.write_qr_pngs([row], tmp_path, [promo])
     assert decode_qr_png((tmp_path / "sample-valid.png").read_bytes()) == token
     assert decode_qr_png((tmp_path / "promo-DEMO.png").read_bytes()) == link
+
+
+def test_main_never_emails_the_demo_accounts(monkeypatch: pytest.MonkeyPatch) -> None:
+    # BE-18: registration and payment notify the buyer; the seed must not mail the demo
+    # addresses, even on a server with EMAIL_PROVIDER=smtp.
+    from app.modules.notifications import service as notifications
+
+    seen: list[object] = []
+
+    def fake_run(session: Session, **kwargs: object) -> object:
+        seen.append(notifications.get_provider())
+        return object()
+
+    monkeypatch.setattr(seed_demo, "run", fake_run)
+    monkeypatch.setattr(seed_demo, "print_summary", lambda result, **kwargs: None)
+
+    assert seed_demo.main([]) == 0
+    assert isinstance(seen[0], seed_demo.NoEmailProvider)

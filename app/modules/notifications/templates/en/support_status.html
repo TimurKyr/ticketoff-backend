@@ -1,0 +1,6 @@
+{% extends "base.html" %}
+{% block body %}
+{% set labels = {"open": "open", "in_progress": "in progress", "waiting_customer": "waiting for your reply", "resolved": "resolved"} %}
+    <p>The status of your request "{{ case_subject }}" changed: <strong>{{ labels[status] }}</strong>.</p>
+    <p><a href="{{ case_url }}">Open the request</a></p>
+{% endblock %}

@@ -1,0 +1,4 @@
+{% set labels = {"open": "открыто", "in_progress": "в работе", "waiting_customer": "ждёт вашего ответа", "resolved": "решено"} %}
+Статус вашего обращения «{{ case_subject }}» изменился: {{ labels[status] }}.
+
+Открыть обращение: {{ case_url }}

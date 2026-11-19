@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block body %}
+{% set labels = {"starts_at": "Начало", "ends_at": "Окончание", "venue": "Место"} %}
+    <p>Организатор изменил событие.</p>
+    <h2 style="margin:16px 0 4px;font-size:20px;">{{ event_title }}</h2>
+    <ul>
+{% for c in changes %}
+      <li>{{ labels[c.field] }}: <s>{% if c.field == 'venue' %}{{ c.old }}{% elif c.old %}{{ c.old | local_dt(tz_name) }}{% else %}не указано{% endif %}</s> → <strong>{% if c.field == 'venue' %}{{ c.new }}{% elif c.new %}{{ c.new | local_dt(tz_name) }}{% else %}не указано{% endif %}</strong></li>
+{% endfor %}
+    </ul>
+    <p>Ваши билеты остаются в силе.</p>
+{% endblock %}

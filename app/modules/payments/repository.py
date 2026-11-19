@@ -5,7 +5,6 @@ from sqlalchemy.orm import Session
 
 from app.modules.identity.enums import PayoutAccountStatus
 from app.modules.identity.models import OrganizerProfile, PayoutAccount
-from app.modules.ops.models import Notification
 from app.modules.orders.enums import TicketKind
 from app.modules.orders.models import Order, TicketType
 from app.modules.payments.enums import PaymentPurpose, PaymentStatus, RefundStatus
@@ -85,11 +84,6 @@ def add_payment(session: Session, payment: Payment) -> None:
 
 def add_refund(session: Session, refund: Refund) -> None:
     session.add(refund)
-    session.flush()
-
-
-def add_notification(session: Session, notification: Notification) -> None:
-    session.add(notification)
     session.flush()
 
 

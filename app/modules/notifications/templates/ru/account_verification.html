@@ -1,0 +1,6 @@
+{% extends "base.html" %}
+{% block body %}
+    <p>Подтвердите адрес электронной почты, чтобы завершить регистрацию в ticketoff.</p>
+    <p><a href="{{ verify_url }}" style="display:inline-block;padding:10px 16px;background:#111;color:#fff;border-radius:6px;text-decoration:none;">Подтвердить email</a></p>
+    <p style="color:#6b7280;font-size:13px;">Ссылка действует {{ expires_hours }} ч. Если вы не регистрировались, просто проигнорируйте это письмо.</p>
+{% endblock %}

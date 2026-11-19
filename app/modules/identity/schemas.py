@@ -3,7 +3,7 @@ from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, StringConstraints
 
-from app.modules.identity.enums import SystemRole, VerificationStatus
+from app.modules.identity.enums import Language, SystemRole, VerificationStatus
 
 DisplayName = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)]
 
@@ -11,6 +11,13 @@ DisplayName = Annotated[str, StringConstraints(strip_whitespace=True, min_length
 class UserRegister(BaseModel):
     email: EmailStr
     password: str = Field(min_length=8, max_length=128)
+    # Language of the account's emails.
+    language: Language = Language.RU
+
+
+class VerifyEmailIn(BaseModel):
+    # The token from the link's ?token= (a JWT; far below this limit).
+    token: str = Field(min_length=1, max_length=2048)
 
 
 class UserOut(BaseModel):
@@ -20,6 +27,7 @@ class UserOut(BaseModel):
     email: str
     system_role: SystemRole
     email_verified: bool
+    language: Language
 
 
 class MeOut(UserOut):

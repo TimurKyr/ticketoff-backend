@@ -1,0 +1,8 @@
+{% extends "base.html" %}
+{% block body %}
+    <p>Оплата заказа не прошла.</p>
+    <h2 style="margin:16px 0 4px;font-size:20px;">{{ event_title }}</h2>
+    <p style="margin:0;">{{ starts_at | local_dt(tz_name) }}<br>Сумма: {{ amount_kzt | money }}</p>
+    <p>Билеты пока забронированы за вами. Повторить оплату можно до <strong>{{ retry_until | local_dt(tz_name) }}</strong>.</p>
+    <p><a href="{{ order_url }}">Повторить оплату</a></p>
+{% endblock %}

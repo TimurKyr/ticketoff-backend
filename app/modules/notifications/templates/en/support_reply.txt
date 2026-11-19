@@ -1,0 +1,5 @@
+Support replied to your request "{{ case_subject }}":
+
+{{ message_excerpt }}
+
+Open the request: {{ case_url }}

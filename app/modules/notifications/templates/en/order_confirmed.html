@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block body %}
+    <p>{% if is_paid %}Your order is paid.{% else %}Your registration is confirmed.{% endif %}</p>
+    <h2 style="margin:16px 0 4px;font-size:20px;">{{ event_title }}</h2>
+    <p style="margin:0;">{{ starts_at | local_dt(tz_name) }}<br>{{ venue_line }}</p>
+    <ul>
+{% for t in tickets %}
+      <li>{{ t.ticket_type }}: {{ t.guest_name }}</li>
+{% endfor %}
+    </ul>
+{% if is_paid %}
+    <p>Total: {{ total_kzt | money }}{% if discount_kzt %}<br>Discount: {{ discount_kzt | money }}{% endif %}<br><strong>Paid: {{ paid_kzt | money }}</strong></p>
+{% endif %}
+{% if tickets_url %}
+    <p>There are too many tickets to attach. <a href="{{ tickets_url }}">All your tickets</a></p>
+{% else %}
+    <p>Your tickets are attached (PDF with a QR code). Show the QR code at the entrance.</p>
+{% endif %}
+    <p><a href="{{ order_url }}">Open the order</a></p>
+{% endblock %}

@@ -1,0 +1,13 @@
+We're sorry: the event has been cancelled.
+
+Event: {{ event_title }}
+It was planned for: {{ starts_at | local_dt(tz_name) }}
+
+{% if refund_kzt %}
+We have refunded your payment in full: {{ refund_kzt | money }}.
+{% endif %}
+Your orders for this event are cancelled and the tickets are no longer valid.
+
+{% for url in order_urls %}
+Order: {{ url }}
+{% endfor %}

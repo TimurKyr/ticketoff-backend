@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block body %}
+{% set labels = {"starts_at": "Start", "ends_at": "End", "venue": "Venue"} %}
+    <p>The organizer changed the event.</p>
+    <h2 style="margin:16px 0 4px;font-size:20px;">{{ event_title }}</h2>
+    <ul>
+{% for c in changes %}
+      <li>{{ labels[c.field] }}: <s>{% if c.field == 'venue' %}{{ c.old }}{% elif c.old %}{{ c.old | local_dt(tz_name) }}{% else %}not set{% endif %}</s> → <strong>{% if c.field == 'venue' %}{{ c.new }}{% elif c.new %}{{ c.new | local_dt(tz_name) }}{% else %}not set{% endif %}</strong></li>
+{% endfor %}
+    </ul>
+    <p>Your tickets stay valid.</p>
+{% endblock %}

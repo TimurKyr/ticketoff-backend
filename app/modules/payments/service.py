@@ -22,8 +22,7 @@ from app.modules.events.enums import EventStatus
 from app.modules.events.models import Event
 from app.modules.identity.enums import PayoutAccountStatus, VerificationStatus
 from app.modules.identity.models import PayoutAccount, User
-from app.modules.ops.enums import NotificationChannel, NotificationType
-from app.modules.ops.models import Notification
+from app.modules.notifications import flows as notification_flows
 from app.modules.orders import repository as orders_repository
 from app.modules.orders import service as orders_service
 from app.modules.orders.enums import OrderStatus, TicketStatus
@@ -245,17 +244,12 @@ def pay_order(
     if succeeded:
         order.status = OrderStatus.PAID
         orders_service.issue_tickets(order)
-        repository.add_notification(
-            session,
-            Notification(
-                user_id=order.buyer_user_id,
-                type=NotificationType.ORDER_CONFIRMED,
-                channel=NotificationChannel.IN_APP,
-                payload={"order_id": str(order.id)},
-            ),
-        )
-    # A failed payment changes nothing else: the order stays pending and keeps its hold.
-    session.commit()  # one commit: payment, audit row, status, tickets and notification
+        notification_flows.order_confirmed(session, order)
+    else:
+        # A failed payment changes nothing else: the order stays pending and keeps its hold.
+        notification_flows.payment_failed(session, order, payment)
+    # One commit: payment, audit row, status, tickets and notification. Emails after it.
+    session.commit()
     return _result(session, order, payment)
 
 
@@ -325,19 +319,7 @@ def refund_order(
 
     refund = refund_locked_order(session, order, tickets, data.reason)
     payment = refund.payment
-    repository.add_notification(
-        session,
-        Notification(
-            user_id=order.buyer_user_id,
-            type=NotificationType.REFUND_PROCESSED,
-            channel=NotificationChannel.IN_APP,
-            payload={
-                "order_id": str(order.id),
-                "refund_id": str(refund.id),
-                "amount_kzt": refund.amount_kzt,
-            },
-        ),
-    )
+    notification_flows.refund_processed(session, order, refund)
     audit.log(
         session,
         actor_user_id=user.id,
@@ -379,8 +361,9 @@ def cancel_event_with_orders(session: Session, event: Event, user: User) -> Even
     free_confirmed -> cancelled (tickets too, checked-in ones included: the event is off);
     paid -> full simulated refund, order and tickets refunded; pending (fresh or expired)
     -> cancelled; already cancelled or refunded -> untouched. One "event.cancelled" audit
-    row with the counts, no per-order rows and no notifications (BE-18 tells ticket
-    holders). Ownership is checked by the route.
+    row with the counts, no per-order rows. One event_cancelled notification per buyer
+    whose orders changed here, with what was refunded to them (BE-18); the emails go after
+    the commit. Ownership is checked by the route.
 
     Locks, in the repository lock order: the event (mark_cancelled), then all of its orders,
     then all of its tickets. Checkout, registration, pay, cancel and refund lock the event
@@ -394,6 +377,8 @@ def cancel_event_with_orders(session: Session, event: Event, user: User) -> Even
         tickets_by_order[ticket.order_item.order_id].append(ticket)
 
     cancelled_orders = refunded_orders = refunded_kzt = pending_cancelled = ticket_count = 0
+    changed: list[Order] = []
+    refunded_by_order: dict[uuid.UUID, int] = {}
     for order in orders:
         tickets = tickets_by_order[order.id]
         if order.status == OrderStatus.FREE_CONFIRMED:
@@ -403,12 +388,16 @@ def cancel_event_with_orders(session: Session, event: Event, user: User) -> Even
             refund = refund_locked_order(session, order, tickets, EVENT_CANCEL_REFUND_REASON)
             refunded_orders += 1
             refunded_kzt += refund.amount_kzt
+            refunded_by_order[order.id] = refund.amount_kzt
         elif order.status == OrderStatus.PENDING:
             orders_service.cancel_locked_order(order, tickets)  # no tickets yet
             pending_cancelled += 1
         else:  # cancelled or refunded already
             continue
+        changed.append(order)
         ticket_count += len(tickets)
+
+    notification_flows.event_cancelled(session, event, changed, refunded_by_order)
 
     audit.log(
         session,
@@ -425,7 +414,7 @@ def cancel_event_with_orders(session: Session, event: Event, user: User) -> Even
             "ticket_count": ticket_count,
         },
     )
-    session.commit()  # event, orders, tickets, refunds and the audit row together
+    session.commit()  # event, orders, tickets, refunds, audit row and notifications together
     return event
 
 

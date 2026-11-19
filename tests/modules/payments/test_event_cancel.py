@@ -24,6 +24,7 @@ from app.modules.events.enums import EventStatus
 from app.modules.events.models import Event, Venue
 from app.modules.identity.models import OrganizerProfile, User
 from app.modules.identity.security import create_access_token
+from app.modules.ops.enums import NotificationType
 from app.modules.ops.models import CheckInRecord, Notification
 from app.modules.orders import repository as orders_repository
 from app.modules.orders import service as orders_service
@@ -207,8 +208,13 @@ def test_cancel_cascades_to_every_order(
         "pending_cancelled": 2,
         "ticket_count": 5,  # 2 free + 2 + 1 paid
     }
-    # No notifications from the cascade (BE-18 sends the emails).
-    assert _count(db_session, Notification) == notifications_before
+    # BE-18: one event_cancelled per buyer whose order the cascade changed (free, both paid,
+    # both pending: 5 buyers here), none for the already cancelled/refunded orders. Their
+    # content is tested in tests/modules/notifications/test_wiring.py.
+    assert _count(db_session, Notification) == notifications_before + 5
+    for_event = Notification.payload["event_id"].astext == str(event.id)
+    cancelled_type = Notification.type == NotificationType.EVENT_CANCELLED
+    assert _count(db_session, Notification, for_event, cancelled_type) == 5
 
     # Inventory back to full, refunds equal everything that was paid.
     available = orders_service.get_availability(db_session, [paid_type, free_type])

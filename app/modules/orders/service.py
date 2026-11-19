@@ -1,7 +1,6 @@
 import uuid
 from collections.abc import Sequence
 from datetime import UTC, datetime
-from zoneinfo import ZoneInfo
 
 from sqlalchemy.orm import Session
 
@@ -9,12 +8,13 @@ from app.common.errors import BusinessRuleError, NotFoundError, PermissionDenied
 from app.modules.audit import service as audit
 from app.modules.events import service as events_service
 from app.modules.events.enums import EventStatus, SeatingType
-from app.modules.events.models import Event, Seat
+from app.modules.events.models import Event
 from app.modules.identity.models import User
+from app.modules.notifications import flows as notification_flows
 from app.modules.orders import repository
 from app.modules.orders.enums import OrderStatus, TicketKind, TicketStatus
 from app.modules.orders.models import Attendee, Order, OrderItem, Ticket, TicketType
-from app.modules.orders.pdf import TicketPdfData, render_ticket_pdf
+from app.modules.orders.pdf import render_ticket_pdf
 from app.modules.orders.qr import issue_ticket_token
 from app.modules.orders.schemas import (
     CheckoutCreate,
@@ -30,6 +30,7 @@ from app.modules.orders.schemas import (
     TicketTypeUpdate,
     ticket_type_rule_error,
 )
+from app.modules.orders.ticket_data import ticket_pdf_data
 from app.modules.promotions import service as promotions_service
 
 # Organizers cannot change ticket types once the event is over or called off.
@@ -504,6 +505,7 @@ def register_free(
     issue_tickets(order)
 
     repository.add_order(session, order)
+    notification_flows.order_confirmed(session, order)  # email with the PDFs after the commit
     session.commit()  # also releases the ticket type locks
     return order_out(order)
 
@@ -655,17 +657,6 @@ _DEAD_TICKET_STATUSES = (TicketStatus.CANCELLED, TicketStatus.REFUNDED)
 _CONFIRMED_ORDER_STATUSES = (OrderStatus.PAID, OrderStatus.FREE_CONFIRMED)
 
 
-def _venue_line(event: Event) -> str:
-    venue = event.venue
-    return ", ".join(part for part in (venue.name, venue.address, venue.city) if part)
-
-
-def _seat_line(seat: Seat | None) -> str | None:
-    if seat is None:
-        return None
-    return f"{seat.row.section.name} · Row {seat.row.label} · Seat {seat.number}"
-
-
 def get_my_ticket_pdf(session: Session, user: User, ticket_id: uuid.UUID) -> tuple[bytes, str]:
     """A4 PDF of one of my tickets and its download filename.
 
@@ -687,17 +678,5 @@ def get_my_ticket_pdf(session: Session, user: User, ticket_id: uuid.UUID) -> tup
     if event.status == EventStatus.CANCELLED:
         raise BusinessRuleError("Event was cancelled")
 
-    # start_at is stored in UTC; a ticket shows the time at the venue.
-    tz_name = event.venue.timezone
-    data = TicketPdfData(
-        event_title=event.title,
-        starts_at_local=event.start_at.astimezone(ZoneInfo(tz_name)),
-        tz_name=tz_name,
-        venue_line=_venue_line(event),
-        ticket_type=ticket.order_item.ticket_type.name,
-        guest_name=ticket.attendee.name,
-        seat_line=_seat_line(ticket.seat),
-        ticket_id=ticket.id,
-        qr_token=ticket.qr_token,
-    )
+    data = ticket_pdf_data(ticket, event)
     return render_ticket_pdf(data), f"ticket-{ticket.id}.pdf"

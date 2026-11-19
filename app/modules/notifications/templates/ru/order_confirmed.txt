@@ -1,0 +1,25 @@
+{% if is_paid %}Ваш заказ оплачен.{% else %}Ваша регистрация подтверждена.{% endif +%}
+
+Событие: {{ event_title }}
+Когда: {{ starts_at | local_dt(tz_name) }}
+Где: {{ venue_line }}
+
+Билеты:
+{% for t in tickets %}
+- {{ t.ticket_type }}: {{ t.guest_name }}
+{% endfor %}
+{% if is_paid %}
+
+Сумма: {{ total_kzt | money }}
+{% if discount_kzt %}
+Скидка: {{ discount_kzt | money }}
+{% endif %}
+Оплачено: {{ paid_kzt | money }}
+{% endif %}
+
+{% if tickets_url %}
+Билетов много, поэтому они не приложены к письму. Все билеты: {{ tickets_url }}
+{% else %}
+Билеты во вложении (PDF с QR-кодом). Покажите QR-код на входе.
+{% endif %}
+Заказ: {{ order_url }}

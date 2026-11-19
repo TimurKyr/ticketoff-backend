@@ -7,6 +7,8 @@ from sqlalchemy.orm import Session
 import app.modules.registry  # noqa: F401
 from app.core.db import engine, get_session
 from app.main import app
+from app.modules.notifications import service as notifications
+from tests.emails import RecordingEmailProvider
 
 
 @pytest.fixture
@@ -50,3 +52,13 @@ def session_api(db_session: Session) -> Iterator[TestClient]:
     with TestClient(app) as tc:
         yield tc
     app.dependency_overrides.clear()
+
+
+@pytest.fixture(autouse=True)
+def emails() -> Iterator[RecordingEmailProvider]:
+    """Every test sends email through a recording provider: nothing ever reaches SMTP.
+    Tests that care read `emails.sent`."""
+    recorder = RecordingEmailProvider()
+    notifications.set_provider(recorder)
+    yield recorder
+    notifications.set_provider(None)

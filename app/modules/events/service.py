@@ -10,6 +10,7 @@ from app.modules.events.enums import EventStatus, EventVisibility
 from app.modules.events.models import Event, Venue
 from app.modules.events.schemas import EventBucket, EventCreate, EventUpdate, check_dates
 from app.modules.identity.models import OrganizerProfile, User
+from app.modules.notifications import flows as notification_flows
 from app.modules.orders import repository as orders_repository
 from app.modules.orders.models import TicketType
 
@@ -122,8 +123,11 @@ def update_event(session: Session, event: Event, payload: EventUpdate, user: Use
         )
 
     old_capacity = event.capacity
+    before = notification_flows.schedule_of(event)
     for name, value in changes.items():
         setattr(event, name, value)
+    # Ticket holders hear about a new time or venue of a published event (after the commit).
+    notification_flows.event_updated(session, event, before)
     if "capacity" in changes and changes["capacity"] != old_capacity:
         audit.log(
             session,

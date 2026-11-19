@@ -1,0 +1,1 @@
+Support replied: {{ case_subject }}

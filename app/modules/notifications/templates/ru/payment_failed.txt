@@ -1,0 +1,8 @@
+Оплата заказа не прошла.
+
+Событие: {{ event_title }}
+Когда: {{ starts_at | local_dt(tz_name) }}
+Сумма: {{ amount_kzt | money }}
+
+Билеты пока забронированы за вами. Повторить оплату можно до {{ retry_until | local_dt(tz_name) }}.
+Заказ: {{ order_url }}

@@ -21,7 +21,7 @@ from app.modules.checkin.schemas import ScanResult
 from app.modules.events.models import Event, Venue
 from app.modules.identity.models import OrganizerProfile, User
 from app.modules.identity.security import create_access_token
-from app.modules.ops.models import CheckInRecord
+from app.modules.ops.models import CheckInRecord, Notification
 from app.modules.orders import repository, service
 from app.modules.orders.enums import OrderStatus, TicketStatus
 from app.modules.orders.models import Attendee, Order, OrderItem, Ticket, TicketType
@@ -463,6 +463,7 @@ def test_scan_during_a_cancel_waits_and_answers_cancelled(
             cleanup.execute(delete(Event).where(Event.id == ids["event"]))
             cleanup.execute(delete(Venue).where(Venue.id == ids["venue"]))
             cleanup.execute(delete(OrganizerProfile).where(OrganizerProfile.id == ids["organizer"]))
+            cleanup.execute(delete(Notification).where(Notification.user_id.in_(ids["users"])))
             cleanup.execute(delete(User).where(User.id.in_(ids["users"])))
             cleanup.commit()
 

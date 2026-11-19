@@ -1,0 +1,6 @@
+{% extends "base.html" %}
+{% block body %}
+    <p>Confirm your email address to finish signing up for ticketoff.</p>
+    <p><a href="{{ verify_url }}" style="display:inline-block;padding:10px 16px;background:#111;color:#fff;border-radius:6px;text-decoration:none;">Confirm email</a></p>
+    <p style="color:#6b7280;font-size:13px;">The link is valid for {{ expires_hours }} h. If you didn't sign up, just ignore this email.</p>
+{% endblock %}
