@@ -4,7 +4,6 @@ import uuid
 from collections.abc import Iterator
 from pathlib import Path
 
-import cv2
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select
@@ -24,6 +23,7 @@ from app.modules.orders.qr import verify_ticket_token
 from app.modules.payments.models import Payment, Refund
 from app.scripts import seed_demo
 from tests.markers import postgres_only
+from tests.qr import decode_qr_png
 
 PASSWORD = "demo-password-for-tests"
 COUNTED = (
@@ -158,6 +158,4 @@ def test_qr_png_decodes_to_the_token(tmp_path: Path) -> None:
         qr_token=token,
     )
     seed_demo.write_qr_pngs([row], tmp_path)
-    image = cv2.imread(str(tmp_path / "sample-valid.png"))
-    decoded, _, _ = cv2.QRCodeDetector().detectAndDecode(image)
-    assert decoded == token
+    assert decode_qr_png((tmp_path / "sample-valid.png").read_bytes()) == token

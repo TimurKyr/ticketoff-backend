@@ -5,8 +5,6 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
-import cv2
-import numpy as np
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select, update
@@ -23,6 +21,7 @@ from app.modules.orders.models import Order, TicketType
 from app.modules.promotions.models import PromoCode, PromoRedemption
 from tests.factories import create_event, create_ticket_type
 from tests.markers import postgres_only
+from tests.qr import decode_qr_png
 
 pytestmark = postgres_only
 
@@ -467,12 +466,11 @@ def test_qr_png_encodes_a_link_to_the_event_with_the_token(
 
     assert response.status_code == 200
     assert response.headers["content-type"] == "image/png"
-    image = cv2.imdecode(np.frombuffer(response.content, np.uint8), cv2.IMREAD_COLOR)
     # A phone camera must open something: a link to the event page, carrying the token.
     expected = (
         f"{get_settings().frontend_url.rstrip('/')}/events/{event.id}?promo={code['qr_token']}"
     )
-    assert cv2.QRCodeDetector().detectAndDecode(image)[0] == expected
+    assert decode_qr_png(response.content) == expected
 
 
 def test_qr_png_of_another_organizers_event_is_404(
