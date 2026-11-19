@@ -1,0 +1,8 @@
+{% set labels = {"starts_at": "Начало", "ends_at": "Окончание", "venue": "Место"} %}
+Организатор изменил событие «{{ event_title }}».
+
+{% for c in changes %}
+{{ labels[c.field] }}: {% if c.field == 'venue' %}{{ c.old }}{% elif c.old %}{{ c.old | local_dt(tz_name) }}{% else %}не указано{% endif %} → {% if c.field == 'venue' %}{{ c.new }}{% elif c.new %}{{ c.new | local_dt(tz_name) }}{% else %}не указано{% endif +%}
+{% endfor %}
+
+Ваши билеты остаются в силе.

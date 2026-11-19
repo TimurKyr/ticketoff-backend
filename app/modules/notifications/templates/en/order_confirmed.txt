@@ -1,0 +1,25 @@
+{% if is_paid %}Your order is paid.{% else %}Your registration is confirmed.{% endif +%}
+
+Event: {{ event_title }}
+When: {{ starts_at | local_dt(tz_name) }}
+Where: {{ venue_line }}
+
+Tickets:
+{% for t in tickets %}
+- {{ t.ticket_type }}: {{ t.guest_name }}
+{% endfor %}
+{% if is_paid %}
+
+Total: {{ total_kzt | money }}
+{% if discount_kzt %}
+Discount: {{ discount_kzt | money }}
+{% endif %}
+Paid: {{ paid_kzt | money }}
+{% endif %}
+
+{% if tickets_url %}
+There are too many tickets to attach. All your tickets: {{ tickets_url }}
+{% else %}
+Your tickets are attached (PDF with a QR code). Show the QR code at the entrance.
+{% endif %}
+Order: {{ order_url }}

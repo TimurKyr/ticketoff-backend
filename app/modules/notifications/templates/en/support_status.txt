@@ -1,0 +1,4 @@
+{% set labels = {"open": "open", "in_progress": "in progress", "waiting_customer": "waiting for your reply", "resolved": "resolved"} %}
+The status of your request "{{ case_subject }}" changed: {{ labels[status] }}.
+
+Open the request: {{ case_url }}

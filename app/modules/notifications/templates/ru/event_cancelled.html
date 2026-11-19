@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block body %}
+    <p>К сожалению, событие отменено.</p>
+    <h2 style="margin:16px 0 4px;font-size:20px;">{{ event_title }}</h2>
+    <p style="margin:0;">Было запланировано: {{ starts_at | local_dt(tz_name) }}</p>
+{% if refund_kzt %}
+    <p><strong>Мы полностью вернули оплату: {{ refund_kzt | money }}.</strong></p>
+{% endif %}
+    <p>Ваши заказы на это событие отменены, билеты больше не действуют.</p>
+    <p>
+{% for url in order_urls %}
+      <a href="{{ url }}">Открыть заказ{% if order_urls | length > 1 %} {{ loop.index }}{% endif %}</a><br>
+{% endfor %}
+    </p>
+{% endblock %}

@@ -180,7 +180,13 @@ def test_fail_records_failed_payment_and_keeps_order_pending(
     assert result.order.tickets == []
     assert result.order.expires_at == pending.expires_at
     assert _stored_tickets(db_session, pending.id) == 0
-    assert _notifications(db_session, buyer) == []
+    # BE-18: a failed payment now tells the buyer (in-app row + email after the commit).
+    [notification] = _notifications(db_session, buyer)
+    assert notification.type == NotificationType.PAYMENT_FAILED
+    assert notification.payload == {
+        "order_id": str(pending.id),
+        "payment_id": str(result.payment.id),
+    }
 
 
 def test_success_after_fail_works(db_session: Session, buyer: User, pending: OrderOut) -> None:

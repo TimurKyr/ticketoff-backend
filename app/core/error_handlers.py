@@ -9,6 +9,7 @@ from app.common.errors import (
     InvalidInputError,
     NotFoundError,
     PermissionDeniedError,
+    RateLimitedError,
 )
 
 STATUS_BY_ERROR: dict[type[DomainError], int] = {
@@ -16,6 +17,7 @@ STATUS_BY_ERROR: dict[type[DomainError], int] = {
     PermissionDeniedError: status.HTTP_403_FORBIDDEN,
     BusinessRuleError: status.HTTP_409_CONFLICT,
     InvalidInputError: status.HTTP_422_UNPROCESSABLE_CONTENT,
+    RateLimitedError: status.HTTP_429_TOO_MANY_REQUESTS,
 }
 
 
@@ -24,7 +26,8 @@ async def _domain_error(_: Request, exc: Exception) -> JSONResponse:
         (code for cls, code in STATUS_BY_ERROR.items() if isinstance(exc, cls)),
         status.HTTP_400_BAD_REQUEST,
     )
-    return JSONResponse(status_code=code, content={"detail": str(exc)})
+    headers = {"Retry-After": str(exc.retry_after)} if isinstance(exc, RateLimitedError) else None
+    return JSONResponse(status_code=code, content={"detail": str(exc)}, headers=headers)
 
 
 def add_error_handlers(app: FastAPI) -> None:

@@ -14,6 +14,7 @@ from app.core.db import SessionLocal, engine
 from app.modules.events.enums import EventStatus, EventVisibility, SeatingType
 from app.modules.events.models import Event, Venue
 from app.modules.identity.models import OrganizerProfile, User
+from app.modules.ops.models import Notification
 from app.modules.orders import repository, service
 from app.modules.orders.enums import OrderStatus, TicketStatus
 from app.modules.orders.models import Attendee, Order, OrderItem, Ticket, TicketType
@@ -547,7 +548,9 @@ def committed() -> Iterator[Callable[..., Committed]]:
             cleanup.execute(delete(Event).where(Event.id == c.event.id))
             cleanup.execute(delete(Venue).where(Venue.id == c.event.venue_id))
             cleanup.execute(delete(OrganizerProfile).where(OrganizerProfile.id == organizer.id))
-            cleanup.execute(delete(User).where(User.id.in_([organizer.user_id, *c.buyer_ids])))
+            users = [organizer.user_id, *c.buyer_ids]
+            cleanup.execute(delete(Notification).where(Notification.user_id.in_(users)))
+            cleanup.execute(delete(User).where(User.id.in_(users)))
         cleanup.commit()
 
 

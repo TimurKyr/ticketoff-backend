@@ -1,0 +1,8 @@
+Your payment did not go through.
+
+Event: {{ event_title }}
+When: {{ starts_at | local_dt(tz_name) }}
+Amount: {{ amount_kzt | money }}
+
+Your tickets are still held for you. You can retry until {{ retry_until | local_dt(tz_name) }}.
+Order: {{ order_url }}

@@ -1,0 +1,1 @@
+Event cancelled: {{ event_title }}

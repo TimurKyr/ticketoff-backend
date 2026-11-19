@@ -17,6 +17,11 @@ tokens signed with this server's TICKET_SIGNING_SECRET, and cancel / refund / ch
 the same audit rows as in the app. A ticket whose status differs from the wanted one (a run
 interrupted after issuing it) is moved there on the next run, where the app allows it.
 
+Email (BE-18): the flows the seed goes through (registration, payment, refund) notify the buyer.
+The demo accounts are not real mailboxes, so main() installs a provider that sends nothing,
+whatever EMAIL_PROVIDER says (also on the server, where it may be smtp). The in-app rows
+are still written, so the demo buyer has notifications to show.
+
 Passwords: DEMO_PASSWORD, if set, is the password of every demo account (and resets it on
 existing accounts); it is never printed. Without it, newly created accounts get one random
 password, printed once; existing accounts keep theirs.
@@ -46,6 +51,8 @@ from app.modules.events.schemas import EventCreate, EventUpdate
 from app.modules.identity.models import OrganizerProfile, StaffAssignment, User
 from app.modules.identity.security import hash_password, verify_password
 from app.modules.identity.service import normalize_email
+from app.modules.notifications import service as notifications
+from app.modules.notifications.providers import EmailMessage
 from app.modules.orders import service as orders_service
 from app.modules.orders.enums import OrderStatus, TicketKind, TicketStatus
 from app.modules.orders.models import Attendee, Order, OrderItem, Ticket, TicketType
@@ -721,6 +728,13 @@ def print_summary(result: SeedResult, *, print_tokens: bool) -> None:
         print("  (QR tokens and promo links: run again with --print-tokens)")
 
 
+class NoEmailProvider:
+    """Drops every email: the seed must never mail the demo addresses."""
+
+    def send(self, message: EmailMessage) -> None:
+        pass
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Create idempotent ticketoff demo data.")
     parser.add_argument("--print-tokens", action="store_true", help="print ticket QR tokens")
@@ -735,6 +749,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     from app.core.db import SessionLocal
 
     password = os.environ.get("DEMO_PASSWORD") or None
+    notifications.set_provider(NoEmailProvider())
     with SessionLocal() as session:
         try:
             result = run(session, password=password, reset_scans=args.reset_scans)

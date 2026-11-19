@@ -1,0 +1,11 @@
+The organizer refunded your order.
+
+Event: {{ event_title }}
+When: {{ starts_at | local_dt(tz_name) }}
+Refund: {{ amount_kzt | money }}
+{% if reason %}
+Reason: {{ reason }}
+{% endif %}
+
+The tickets of this order are no longer valid.
+Order: {{ order_url }}

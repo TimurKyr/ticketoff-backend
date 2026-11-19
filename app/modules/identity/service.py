@@ -1,11 +1,35 @@
+import math
+from datetime import UTC, datetime, timedelta
+
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.common.errors import BusinessRuleError, NotFoundError
+from app.common.errors import (
+    BusinessRuleError,
+    InvalidInputError,
+    NotFoundError,
+    RateLimitedError,
+)
+from app.modules.identity import repository
+from app.modules.identity.enums import Language
 from app.modules.identity.models import OrganizerProfile, StaffAssignment, User
 from app.modules.identity.schemas import MeOut, UserOut
-from app.modules.identity.security import hash_password, verify_password
+from app.modules.identity.security import (
+    EMAIL_VERIFICATION_TTL,
+    create_email_verification_token,
+    decode_email_verification_token,
+    hash_password,
+    verify_password,
+)
+from app.modules.notifications import links
+from app.modules.notifications import service as notifications
+from app.modules.ops.enums import NotificationType
+
+# One message for every bad link, so a caller learns nothing about why it failed.
+INVALID_VERIFICATION_LINK = "Invalid or expired verification link"
+# A user may ask for a new verification email at most this often (registration counts).
+VERIFICATION_RESEND_COOLDOWN = timedelta(seconds=60)
 
 # Hash of a throwaway password. Checked when the email is unknown so that
 # "unknown email" and "wrong password" take the same time (no user enumeration).
@@ -16,15 +40,73 @@ def normalize_email(email: str) -> str:
     return email.strip().lower()
 
 
-def register_user(session: Session, email: str, password: str) -> User:
-    user = User(email=normalize_email(email), password_hash=hash_password(password))
+def register_user(
+    session: Session, email: str, password: str, language: Language = Language.RU
+) -> User:
+    user = User(
+        email=normalize_email(email), password_hash=hash_password(password), language=language
+    )
     session.add(user)
     try:
-        session.commit()
+        session.flush()  # the id goes into the verification link
     except IntegrityError as exc:  # unique index on users.email
         session.rollback()
         raise BusinessRuleError("Email already registered") from exc
+    # A brand-new row: nobody else can hold it yet, so no lock is needed for the clock.
+    send_verification_email(session, user, datetime.now(UTC))
+    session.commit()  # the user; the verification email goes out after this
     return user
+
+
+def send_verification_email(session: Session, user: User, now: datetime) -> None:
+    """Queue an account_verification email (email only, no in-app row) for after the
+    commit, and record when (the resend cooldown counts from it). The token is only in the
+    email body, which is never logged."""
+    user.email_verification_sent_at = now
+    token = create_email_verification_token(user.id, user.email)
+    context = {
+        "verify_url": links.verify_email_url(token),
+        "expires_hours": int(EMAIL_VERIFICATION_TTL.total_seconds() // 3600),
+    }
+    notifications.notify(
+        session, user, NotificationType.ACCOUNT_VERIFICATION, context, in_app=False
+    )
+
+
+def verify_email(session: Session, token: str) -> User:
+    """Mark the token's user verified. Idempotent: an already verified user gets the same
+    answer. Expired, tampered, wrong-kind tokens, an unknown user, or a user whose email
+    is no longer the one in the token all get the same InvalidInputError."""
+    decoded = decode_email_verification_token(token)
+    user = session.get(User, decoded[0]) if decoded else None
+    if user is None or user.email != decoded[1]:
+        raise InvalidInputError(INVALID_VERIFICATION_LINK)
+    if not user.email_verified:
+        user.email_verified = True
+        session.commit()
+    return user
+
+
+def resend_verification_email(session: Session, user: User) -> None:
+    """A fresh link for the logged-in user, at most once per VERIFICATION_RESEND_COOLDOWN.
+
+    The user row is locked (FOR UPDATE) before the clock is read, so two resends at the same
+    moment run one after the other and the second one is refused (RateLimitedError -> 429
+    with Retry-After).
+    """
+    user = repository.lock_user(session, user.id)
+    if user.email_verified:
+        raise BusinessRuleError("Email is already verified")
+    now = datetime.now(UTC)
+    if user.email_verification_sent_at is not None:
+        wait = user.email_verification_sent_at + VERIFICATION_RESEND_COOLDOWN - now
+        if wait > timedelta(0):
+            raise RateLimitedError(
+                "A verification email was sent recently; try again later",
+                retry_after=math.ceil(wait.total_seconds()),
+            )
+    send_verification_email(session, user, now)
+    session.commit()  # the timestamp; the queued email goes out after this
 
 
 def authenticate_user(session: Session, email: str, password: str) -> User | None:

@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block body %}
+    <p>{% if is_paid %}Ваш заказ оплачен.{% else %}Ваша регистрация подтверждена.{% endif %}</p>
+    <h2 style="margin:16px 0 4px;font-size:20px;">{{ event_title }}</h2>
+    <p style="margin:0;">{{ starts_at | local_dt(tz_name) }}<br>{{ venue_line }}</p>
+    <ul>
+{% for t in tickets %}
+      <li>{{ t.ticket_type }}: {{ t.guest_name }}</li>
+{% endfor %}
+    </ul>
+{% if is_paid %}
+    <p>Сумма: {{ total_kzt | money }}{% if discount_kzt %}<br>Скидка: {{ discount_kzt | money }}{% endif %}<br><strong>Оплачено: {{ paid_kzt | money }}</strong></p>
+{% endif %}
+{% if tickets_url %}
+    <p>Билетов много, поэтому они не приложены к письму. <a href="{{ tickets_url }}">Все билеты</a></p>
+{% else %}
+    <p>Билеты во вложении (PDF с QR-кодом). Покажите QR-код на входе.</p>
+{% endif %}
+    <p><a href="{{ order_url }}">Открыть заказ</a></p>
+{% endblock %}

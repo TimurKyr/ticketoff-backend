@@ -1,5 +1,5 @@
 from functools import lru_cache
-from typing import Self
+from typing import Literal, Self
 
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -29,10 +29,28 @@ class Settings(BaseSettings):
     processing_fee_percent: int = Field(default=3, ge=0, le=100)
     # How long a pending paid order holds inventory before it expires.
     checkout_hold_minutes: int = Field(default=15, ge=1)
+    # Email (BE-18). "console" only logs the emails (local, tests); "smtp" sends them.
+    email_provider: Literal["console", "smtp"] = "console"
+    email_from: str = "ticketoff <no-reply@ticketoff.store>"
+    smtp_host: str | None = None
+    smtp_port: int = Field(default=587, ge=1, le=65535)
+    smtp_user: str | None = None
+    smtp_password: str | None = None
+    smtp_starttls: bool = True
+    # Seconds, per SMTP step. A slow or dead mail server fails only that email (logged), never
+    # the action; but emails are sent in the request after the commit, so it waits that long.
+    smtp_timeout: float = Field(default=10, gt=0)
 
     @property
     def cors_origin_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
+
+    @model_validator(mode="after")
+    def check_email(self) -> Self:
+        # Fail at startup, not on the first email.
+        if self.email_provider == "smtp" and not self.smtp_host:
+            raise ValueError("EMAIL_PROVIDER=smtp needs SMTP_HOST")
+        return self
 
     @model_validator(mode="after")
     def check_secrets(self) -> Self:

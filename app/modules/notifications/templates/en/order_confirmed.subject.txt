@@ -1,0 +1,1 @@
+{% if is_paid %}Order paid{% else %}Registration confirmed{% endif %}: {{ event_title }}

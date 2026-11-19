@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block body %}
+    <p>Организатор оформил возврат по вашему заказу.</p>
+    <h2 style="margin:16px 0 4px;font-size:20px;">{{ event_title }}</h2>
+    <p style="margin:0;">{{ starts_at | local_dt(tz_name) }}</p>
+    <p><strong>Сумма возврата: {{ amount_kzt | money }}</strong>{% if reason %}<br>Причина: {{ reason }}{% endif %}</p>
+    <p>Билеты этого заказа больше не действуют.</p>
+    <p><a href="{{ order_url }}">Открыть заказ</a></p>
+{% endblock %}

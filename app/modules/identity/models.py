@@ -1,12 +1,22 @@
 import uuid
 
-from sqlalchemy import Boolean, Column, ForeignKey, String, false
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    Column,
+    DateTime,
+    ForeignKey,
+    String,
+    false,
+    text,
+)
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
 from app.common.base import Base
 from app.common.db_types import enum_column
 from app.modules.identity.enums import (
+    Language,
     PayoutAccountStatus,
     StaffRole,
     SystemRole,
@@ -16,6 +26,8 @@ from app.modules.identity.enums import (
 
 class User(Base):
     __tablename__ = "users"
+    # Names expand to ck_users_<name> via the naming convention.
+    __table_args__ = (CheckConstraint("language IN ('ru', 'en')", name="language_supported"),)
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     email = Column(String, unique=True, nullable=False, index=True)
@@ -24,6 +36,10 @@ class User(Base):
     email_verified = Column(Boolean, nullable=False, default=False)
     # Blocked by a platform admin (BE-22): login and every existing token answer 403.
     is_suspended = Column(Boolean, nullable=False, default=False, server_default=false())
+    # Language of the user's emails (BE-18); set at registration.
+    language = Column(String(2), nullable=False, default=Language.RU, server_default=text("'ru'"))
+    # When the last verification email was queued (BE-18): the resend cooldown counts from it.
+    email_verification_sent_at = Column(DateTime(timezone=True))
 
     organizer_profile = relationship("OrganizerProfile", back_populates="user", uselist=False)
 

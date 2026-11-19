@@ -1,0 +1,5 @@
+Confirm your email address to finish signing up for ticketoff:
+
+{{ verify_url }}
+
+The link is valid for {{ expires_hours }} h. If you didn't sign up, just ignore this email.

@@ -14,6 +14,10 @@ class NotificationType(enum.StrEnum):
     EVENT_CANCELLED = "event_cancelled"
     REFUND_PROCESSED = "refund_processed"
     SUPPORT_REPLY = "support_reply"
+    # BE-18. Native Postgres enum: a new value needs ALTER TYPE ... ADD VALUE in a migration.
+    ACCOUNT_VERIFICATION = "account_verification"
+    PAYMENT_FAILED = "payment_failed"
+    SUPPORT_STATUS = "support_status"
 
 
 class SupportKind(enum.StrEnum):

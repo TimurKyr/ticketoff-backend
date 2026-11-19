@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block body %}
+    <p>The organizer refunded your order.</p>
+    <h2 style="margin:16px 0 4px;font-size:20px;">{{ event_title }}</h2>
+    <p style="margin:0;">{{ starts_at | local_dt(tz_name) }}</p>
+    <p><strong>Refund: {{ amount_kzt | money }}</strong>{% if reason %}<br>Reason: {{ reason }}{% endif %}</p>
+    <p>The tickets of this order are no longer valid.</p>
+    <p><a href="{{ order_url }}">Open the order</a></p>
+{% endblock %}

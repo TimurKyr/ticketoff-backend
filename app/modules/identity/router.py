@@ -13,6 +13,7 @@ from app.modules.identity.schemas import (
     TokenOut,
     UserOut,
     UserRegister,
+    VerifyEmailIn,
 )
 from app.modules.identity.security import create_access_token
 from app.modules.identity.service import (
@@ -28,7 +29,22 @@ FormDep = Annotated[OAuth2PasswordRequestForm, Depends()]
 
 @router.post("/register", response_model=UserOut, status_code=status.HTTP_201_CREATED)
 def register(payload: UserRegister, session: SessionDep) -> User:
-    return register_user(session, payload.email, payload.password)
+    return register_user(session, payload.email, payload.password, payload.language)
+
+
+@router.post("/verify-email", response_model=UserOut, summary="Confirm my email from the link")
+def verify_email(payload: VerifyEmailIn, session: SessionDep) -> User:
+    """No login needed: the link's token says who it is. Calling it again is fine."""
+    return service.verify_email(session, payload.token)
+
+
+@router.post(
+    "/verify-email/resend",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Send me a new verification link",
+)
+def resend_verification_email(user: CurrentUser, session: SessionDep) -> None:
+    service.resend_verification_email(session, user)
 
 
 @router.post("/login", response_model=TokenOut)
