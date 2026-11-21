@@ -117,5 +117,9 @@ class Event(Base):
     registration_opens_at = Column(DateTime(timezone=True))
     registration_closes_at = Column(DateTime(timezone=True))
 
+    # Not columns: set per request by events.service.annotate_on_sale for EventOut.
+    price_from = None
+    availability = None
+
     venue = relationship("Venue")
     organizer = relationship("OrganizerProfile")

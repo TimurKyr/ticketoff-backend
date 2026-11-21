@@ -29,6 +29,26 @@ class EventBucket(enum.StrEnum):
     CANCELLED = "cancelled"
 
 
+class Availability(enum.StrEnum):
+    """How much is left to buy, over the ticket types on sale (for event cards)."""
+
+    AVAILABLE = "available"
+    FEW_LEFT = "few_left"  # at most FEW_LEFT_TICKETS, or at most 10% of their quantity
+    SOLD_OUT = "sold_out"
+
+
+FEW_LEFT_TICKETS = 10
+FEW_LEFT_PERCENT = 10
+
+
+def availability_of(available: int, quantity_total: int) -> Availability:
+    if available <= 0:
+        return Availability.SOLD_OUT
+    if available <= FEW_LEFT_TICKETS or available * 100 <= quantity_total * FEW_LEFT_PERCENT:
+        return Availability.FEW_LEFT
+    return Availability.AVAILABLE
+
+
 def check_dates(
     start_at: AwareDatetime | None,
     end_at: AwareDatetime | None,
@@ -132,6 +152,18 @@ class EventOut(BaseModel):
     end_at: datetime | None
     registration_opens_at: datetime | None
     registration_closes_at: datetime | None
+    # Over the ticket types GET /events/{id}/ticket-types/public lists right now (visible,
+    # inside their sales window). Both null when no type is on sale.
+    price_from: int | None = Field(
+        default=None, description="Lowest price_kzt on sale; 0 if a free type is on sale"
+    )
+    availability: Availability | None = Field(
+        default=None,
+        description=(
+            f"sold_out: nothing left; few_left: at most {FEW_LEFT_TICKETS} left or at most "
+            f"{FEW_LEFT_PERCENT}% of the on-sale quantity"
+        ),
+    )
 
 
 class EventPage(BaseModel):

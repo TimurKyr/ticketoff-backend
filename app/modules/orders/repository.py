@@ -32,12 +32,17 @@ def list_by_event(
     if not include_hidden:
         stmt = stmt.where(TicketType.is_hidden.is_(False))
     if on_sale_at is not None:
-        stmt = stmt.where(
-            or_(TicketType.sales_start_at.is_(None), TicketType.sales_start_at <= on_sale_at),
-            or_(TicketType.sales_end_at.is_(None), TicketType.sales_end_at > on_sale_at),
-        )
+        stmt = stmt.where(sales_window_clause(on_sale_at))
     stmt = stmt.order_by(TicketType.price_kzt, TicketType.name)
     return list(session.scalars(stmt))
+
+
+def sales_window_clause(at: datetime) -> ColumnElement[bool]:
+    """Ticket types whose sales window (either end may be open) contains `at`."""
+    return and_(
+        or_(TicketType.sales_start_at.is_(None), TicketType.sales_start_at <= at),
+        or_(TicketType.sales_end_at.is_(None), TicketType.sales_end_at > at),
+    )
 
 
 def checkout_hold() -> timedelta:

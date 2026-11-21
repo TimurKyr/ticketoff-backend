@@ -1,14 +1,20 @@
 import uuid
+from collections.abc import Iterable
+from dataclasses import dataclass
 from datetime import datetime
 
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session
 
 from app.modules.events.enums import EventStatus, EventVisibility
 from app.modules.events.models import Event, Venue
 from app.modules.events.schemas import EventBucket
-from app.modules.orders.models import Order
-from app.modules.orders.repository import checkout_hold, holding_orders_clause
+from app.modules.orders.models import Order, OrderItem, TicketType
+from app.modules.orders.repository import (
+    checkout_hold,
+    holding_orders_clause,
+    sales_window_clause,
+)
 
 
 def list_venues(session: Session) -> list[Venue]:
@@ -56,6 +62,7 @@ def list_public(
     now: datetime,
     q: str | None,
     category: str | None,
+    city: str | None,
     from_date: datetime | None,
     to_date: datetime | None,
     include_past: bool,
@@ -71,6 +78,8 @@ def list_public(
         stmt = stmt.where(Event.title.ilike(f"%{_escape_like(q)}%", escape="/"))
     if category:
         stmt = stmt.where(Event.category == category)
+    if city:
+        stmt = stmt.join(Venue, Venue.id == Event.venue_id).where(Venue.city == city)
     if from_date:
         stmt = stmt.where(Event.start_at >= from_date)
     if to_date:
@@ -114,3 +123,53 @@ def list_for_organizer(
     elif bucket == EventBucket.UPCOMING:
         stmt = stmt.where(not_closed, Event.start_at > now)
     return _page(session, stmt.order_by(Event.start_at.desc(), Event.id.asc()), limit, offset)
+
+
+@dataclass(frozen=True)
+class OnSaleStats:
+    """Visible ticket types of one event that are on sale (the public ticket type list)."""
+
+    min_price_kzt: int
+    available: int  # summed over those types, never below 0 per type
+    quantity_total: int
+
+
+def on_sale_stats(
+    session: Session, event_ids: Iterable[uuid.UUID], now: datetime
+) -> dict[uuid.UUID, OnSaleStats]:
+    """Per event: the same ticket types as GET /events/{id}/ticket-types/public (visible,
+    sales window contains `now`, sold-out ones included), aggregated in one query for all
+    the events. Events with no such type are absent from the result.
+
+    Held quantities use holding_orders_clause, as get_availability does.
+    """
+    ids = list(event_ids)
+    if not ids:
+        return {}
+    held = (
+        select(OrderItem.ticket_type_id, func.sum(OrderItem.quantity).label("held"))
+        .join(Order, Order.id == OrderItem.order_id)
+        .where(Order.event_id.in_(ids), holding_orders_clause(now, checkout_hold()))
+        .group_by(OrderItem.ticket_type_id)
+        .subquery()
+    )
+    left = TicketType.quantity_total - func.coalesce(held.c.held, 0)
+    stmt = (
+        select(
+            TicketType.event_id,
+            func.min(TicketType.price_kzt),
+            func.sum(case((left > 0, left), else_=0)),
+            func.sum(TicketType.quantity_total),
+        )
+        .outerjoin(held, held.c.ticket_type_id == TicketType.id)
+        .where(
+            TicketType.event_id.in_(ids),
+            TicketType.is_hidden.is_(False),
+            sales_window_clause(now),
+        )
+        .group_by(TicketType.event_id)
+    )
+    return {
+        event_id: OnSaleStats(int(price), int(available), int(total))
+        for event_id, price, available, total in session.execute(stmt)
+    }

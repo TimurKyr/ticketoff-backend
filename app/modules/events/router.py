@@ -1,7 +1,7 @@
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, Query, status
 from pydantic import AwareDatetime
 from sqlalchemy.orm import Session
 
@@ -31,6 +31,12 @@ events_router = APIRouter(prefix="/events", tags=["events"])
 organizer_router = APIRouter(prefix="/organizer/events", tags=["organizer-events"])
 
 
+def _out(session: Session, event: Event) -> Event:
+    """Every EventOut carries price_from and availability."""
+    service.annotate_on_sale(session, [event])
+    return event
+
+
 @venues_router.get("", response_model=list[VenueOut], summary="List venues")
 def list_venues(session: SessionDep) -> list:
     return service.list_venues(session)
@@ -43,7 +49,7 @@ def list_venues(session: SessionDep) -> list:
     summary="Create a draft event",
 )
 def create_event(payload: EventCreate, organizer: OrganizerDep, session: SessionDep) -> Event:
-    return service.create_event(session, organizer, payload)
+    return _out(session, service.create_event(session, organizer, payload))
 
 
 @events_router.get("", response_model=EventPage, summary="Public list of published events")
@@ -51,6 +57,7 @@ def list_public_events(
     session: SessionDep,
     q: str | None = None,
     category: str | None = None,
+    city: Annotated[str | None, Query(description="Exact venues.city, e.g. Алматы")] = None,
     from_date: AwareDatetime | None = None,
     to_date: AwareDatetime | None = None,
     include_past: bool = False,
@@ -61,25 +68,27 @@ def list_public_events(
         session,
         q=q,
         category=category,
+        city=city,
         from_date=from_date,
         to_date=to_date,
         include_past=include_past,
         limit=limit,
         offset=offset,
     )
+    service.annotate_on_sale(session, items)
     return EventPage(items=items, total=total, limit=limit, offset=offset)
 
 
 @events_router.get("/{event_id}", response_model=EventOut, summary="Public event page")
 def get_event(event_id: uuid.UUID, session: SessionDep) -> Event:
-    return service.get_public_event(session, event_id)
+    return _out(session, service.get_public_event(session, event_id))
 
 
 @events_router.patch("/{event_id}", response_model=EventOut, summary="Edit an event")
 def update_event(
     payload: EventUpdate, event: OwnedEventDep, user: CurrentUser, session: SessionDep
 ) -> Event:
-    return service.update_event(session, event, payload, user)
+    return _out(session, service.update_event(session, event, payload, user))
 
 
 @events_router.post(
@@ -89,17 +98,17 @@ def update_event(
     summary="Duplicate an event into a new draft",
 )
 def duplicate_event(event: OwnedEventDep, session: SessionDep) -> Event:
-    return service.duplicate_event(session, event)
+    return _out(session, service.duplicate_event(session, event))
 
 
 @events_router.post("/{event_id}/publish", response_model=EventOut, summary="Publish a draft")
 def publish_event(event: OwnedEventDep, user: CurrentUser, session: SessionDep) -> Event:
-    return service.publish_event(session, event, user)
+    return _out(session, service.publish_event(session, event, user))
 
 
 @events_router.post("/{event_id}/unpublish", response_model=EventOut, summary="Back to draft")
 def unpublish_event(event: OwnedEventDep, user: CurrentUser, session: SessionDep) -> Event:
-    return service.unpublish_event(session, event, user)
+    return _out(session, service.unpublish_event(session, event, user))
 
 
 @events_router.post(
@@ -109,7 +118,7 @@ def unpublish_event(event: OwnedEventDep, user: CurrentUser, session: SessionDep
 )
 def cancel_event(event: OwnedEventDep, user: CurrentUser, session: SessionDep) -> Event:
     """One transaction: free and pending orders cancelled, paid orders fully refunded."""
-    return payments_service.cancel_event_with_orders(session, event, user)
+    return _out(session, payments_service.cancel_event_with_orders(session, event, user))
 
 
 @organizer_router.get("", response_model=EventPage, summary="My events, optionally by bucket")
@@ -123,9 +132,10 @@ def list_my_events(
     items, total = service.list_organizer_events(
         session, organizer, bucket=bucket, limit=limit, offset=offset
     )
+    service.annotate_on_sale(session, items)
     return EventPage(items=items, total=total, limit=limit, offset=offset)
 
 
 @organizer_router.get("/{event_id}", response_model=EventOut, summary="My event, any status")
-def get_my_event(event: OwnedEventDep) -> Event:
-    return event
+def get_my_event(event: OwnedEventDep, session: SessionDep) -> Event:
+    return _out(session, event)

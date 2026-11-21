@@ -1,4 +1,5 @@
 import uuid
+from collections.abc import Iterable
 from datetime import UTC, datetime
 
 from sqlalchemy.orm import Session
@@ -8,7 +9,13 @@ from app.modules.audit import service as audit
 from app.modules.events import repository
 from app.modules.events.enums import EventStatus, EventVisibility
 from app.modules.events.models import Event, Venue
-from app.modules.events.schemas import EventBucket, EventCreate, EventUpdate, check_dates
+from app.modules.events.schemas import (
+    EventBucket,
+    EventCreate,
+    EventUpdate,
+    availability_of,
+    check_dates,
+)
 from app.modules.identity.models import OrganizerProfile, User
 from app.modules.notifications import flows as notification_flows
 from app.modules.orders import repository as orders_repository
@@ -248,6 +255,7 @@ def list_public_events(
     *,
     q: str | None,
     category: str | None,
+    city: str | None = None,
     from_date: datetime | None,
     to_date: datetime | None,
     include_past: bool,
@@ -259,6 +267,7 @@ def list_public_events(
         now=_now(),
         q=q,
         category=category,
+        city=city,
         from_date=from_date,
         to_date=to_date,
         include_past=include_past,
@@ -278,3 +287,18 @@ def list_organizer_events(
     return repository.list_for_organizer(
         session, organizer_id=organizer.id, bucket=bucket, now=_now(), limit=limit, offset=offset
     )
+
+
+def annotate_on_sale(
+    session: Session, events: Iterable[Event], now: datetime | None = None
+) -> None:
+    """Set price_from and availability (EventOut) on each event, in one query for all.
+
+    Same ticket types as the public ticket type list: visible, inside their sales window.
+    """
+    events = list(events)
+    stats = repository.on_sale_stats(session, [e.id for e in events], now or _now())
+    for event in events:
+        row = stats.get(event.id)
+        event.price_from = row.min_price_kzt if row else None
+        event.availability = availability_of(row.available, row.quantity_total) if row else None
