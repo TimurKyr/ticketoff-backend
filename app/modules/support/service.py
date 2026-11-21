@@ -85,9 +85,34 @@ def _load(
     return case, is_opener, is_handler
 
 
+def _case_out(case: SupportCase, opener_email: str, event_title: str | None) -> CaseOut:
+    """Built field by field from loaded values: nothing is lazy-loaded off the case."""
+    return CaseOut(
+        id=case.id,
+        opened_by=case.opened_by,
+        assignee_id=case.assignee_id,
+        kind=case.kind,
+        category=case.category,
+        status=case.status,
+        event_id=case.event_id,
+        order_id=case.order_id,
+        ticket_id=case.ticket_id,
+        created_at=case.created_at,
+        opener_email=opener_email,
+        event_title=event_title,
+    )
+
+
+def _page_out(rows: list[repository.CaseRow], total: int, limit: int, offset: int) -> CasePage:
+    items = [_case_out(r.case, r.opener_email, r.event_title) for r in rows]
+    return CasePage(items=items, total=total, limit=limit, offset=offset)
+
+
 def _detail(session: Session, case: SupportCase) -> CaseDetailOut:
+    opener_email, event_title = repository.case_display(session, case.id)
     messages = [MessageOut.model_validate(m) for m in repository.list_messages(session, case.id)]
-    return CaseDetailOut(**CaseOut.model_validate(case).model_dump(), messages=messages)
+    out = _case_out(case, opener_email, event_title)
+    return CaseDetailOut(**out.model_dump(), messages=messages)
 
 
 def _audit(session: Session, user: User, case: SupportCase, action: str, details: dict) -> None:
@@ -247,9 +272,7 @@ def list_my_cases(
     rows, total = repository.list_opened_by(
         session, user.id, status=status, limit=limit, offset=offset
     )
-    return CasePage(
-        items=[CaseOut.model_validate(c) for c in rows], total=total, limit=limit, offset=offset
-    )
+    return _page_out(rows, total, limit, offset)
 
 
 def list_inbox(
@@ -272,9 +295,7 @@ def list_inbox(
         limit=limit,
         offset=offset,
     )
-    return CasePage(
-        items=[CaseOut.model_validate(c) for c in rows], total=total, limit=limit, offset=offset
-    )
+    return _page_out(rows, total, limit, offset)
 
 
 # --- acting on a case -----------------------------------------------------------------------

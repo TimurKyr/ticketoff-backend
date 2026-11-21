@@ -47,6 +47,9 @@ app.add_middleware(
     allow_credentials=False,  # the API uses Bearer tokens, not cookies
     allow_methods=["*"],
     allow_headers=["*"],
+    # Response headers the web app may read cross-origin: Date (the checkout timer uses server
+    # time) and Retry-After (the resend button shows the real cooldown after a 429).
+    expose_headers=["Date", "Retry-After"],
 )
 add_error_handlers(app)
 app.include_router(auth_router)

@@ -40,6 +40,32 @@ def list_messages(session: Session, case_id: uuid.UUID) -> list[SupportMessage]:
     return list(session.scalars(stmt))
 
 
+@dataclass(frozen=True, slots=True)
+class CaseRow:
+    """A case with what is shown next to it: the opener's email and the event's title."""
+
+    case: SupportCase
+    opener_email: str
+    event_title: str | None
+
+
+def _with_display(*columns):
+    """SELECT columns + the opener's email + the event's title (NULL without an event), FROM
+    support_cases joined to users (opener) and outer-joined to events."""
+    return (
+        select(*columns, User.email, Event.title)
+        .select_from(SupportCase)
+        .join(User, User.id == SupportCase.opened_by)
+        .outerjoin(Event, Event.id == SupportCase.event_id)
+    )
+
+
+def case_display(session: Session, case_id: uuid.UUID) -> tuple[str, str | None]:
+    """(opener email, event title or None) of one case, in one query."""
+    email, title = session.execute(_with_display().where(SupportCase.id == case_id)).one()
+    return email, title
+
+
 def _page(
     session: Session,
     filters: list[ColumnElement[bool]],
@@ -47,17 +73,18 @@ def _page(
     newest_first: bool,
     limit: int,
     offset: int,
-) -> tuple[list[SupportCase], int]:
+) -> tuple[list[CaseRow], int]:
+    """One page of cases with their display fields in one query, plus the count."""
     total = session.scalar(select(func.count()).select_from(SupportCase).where(*filters)) or 0
     order = (
         (SupportCase.created_at.desc(), SupportCase.id)
         if newest_first
         else (SupportCase.created_at, SupportCase.id)
     )
-    rows = session.scalars(
-        select(SupportCase).where(*filters).order_by(*order).limit(limit).offset(offset)
+    rows = session.execute(
+        _with_display(SupportCase).where(*filters).order_by(*order).limit(limit).offset(offset)
     )
-    return list(rows), total
+    return [CaseRow(case, email, title) for case, email, title in rows], total
 
 
 def list_opened_by(
@@ -67,7 +94,7 @@ def list_opened_by(
     status: SupportStatus | None,
     limit: int,
     offset: int,
-) -> tuple[list[SupportCase], int]:
+) -> tuple[list[CaseRow], int]:
     """The user's own cases, newest first."""
     filters = [SupportCase.opened_by == user_id]
     if status is not None:
@@ -83,7 +110,7 @@ def list_inbox(
     kind: SupportKind | None,
     limit: int,
     offset: int,
-) -> tuple[list[SupportCase], int]:
+) -> tuple[list[CaseRow], int]:
     """Cases a handler works on, oldest first (the longest-waiting case comes first).
 
     organizer_id None means a platform admin: every case. Otherwise only attendee cases
@@ -91,7 +118,9 @@ def list_inbox(
     """
     filters: list[ColumnElement[bool]] = []
     if organizer_id is not None:
-        own_events = select(Event.id).where(Event.organizer_id == organizer_id)
+        # correlate(None): the page query also joins events (for the title); without it
+        # this subquery would bind to that outer row instead of listing the organizer's events.
+        own_events = select(Event.id).where(Event.organizer_id == organizer_id).correlate(None)
         filters += [SupportCase.kind == SupportKind.ATTENDEE, SupportCase.event_id.in_(own_events)]
     if status is not None:
         filters.append(SupportCase.status == status)
