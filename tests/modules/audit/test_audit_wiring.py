@@ -267,7 +267,10 @@ def test_check_in_and_undo_are_audited(
             ticket.id,
             owner.id,
         )
-        assert row.details == {"check_in_record_id": str(record.id)}
+        expected = {"check_in_record_id": str(record.id)}
+        if action_type == "ticket.checked_in":
+            expected["method"] = "qr"  # a scan; manual check-ins say "manual"
+        assert row.details == expected
 
 
 def test_refused_scans_write_no_check_in_row(
