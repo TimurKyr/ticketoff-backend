@@ -1,6 +1,7 @@
 """Demo data for the web app, the scanner app and the presentation (BE-23).
 
-    python -m app.scripts.seed_demo [--print-tokens] [--qr-dir PATH] [--reset-scans]
+    python -m app.scripts.seed_demo [--relative-dates] [--print-tokens] [--qr-dir PATH]
+                                    [--reset-scans]
 
 On the server:
 
@@ -11,6 +12,14 @@ of the demo organizer, ticket type name within its event, promo code, attendee n
 the demo buyer's orders of an event) and created only if missing. Running it again changes
 nothing, except with --reset-scans or a DEMO_PASSWORD that differs from the stored one.
 Demo events found under an earlier title (without the "Demo: " prefix) are renamed.
+
+Dates (BE-24): an event gets its date when it is created (today + its offset in Almaty, or
+the nearest Saturday / Sunday) and keeps it on later runs. --relative-dates moves every open
+demo event whose day differs back to today + its offset, so a seed made days before the
+presentation still has events "today", "tomorrow" and "this weekend" on the day. Future
+events move through the event update service (ticket holders get the usual notice). The two
+past events (history for the organizer) are created in the future, sold and scanned, then
+moved into the past with a direct write: the API never lets a published event move there.
 
 Everything goes through the same services as the API, so the tickets carry real tk1.
 tokens signed with this server's TICKET_SIGNING_SECRET, and cancel / refund / check-in leave
@@ -34,7 +43,7 @@ import sys
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -79,6 +88,14 @@ SCANNER_EMAIL = "demo.scanner@ticketoff.store"
 BUYER_EMAIL = "demo.buyer@ticketoff.store"
 ORGANIZER_NAME = "Ticketoff Demo"
 
+# Category slugs (EventOut.category) the seed uses; the web translates these (FE-10).
+CATEGORIES = ("music", "theatre", "education", "sport", "kids", "other")
+
+SATURDAY = "saturday"  # EventSpec.day: the nearest Saturday / Sunday, today included
+SUNDAY = "sunday"
+# A future event starts at least this long after the seed runs (today's, seeded at night).
+START_LEAD = timedelta(hours=1)
+
 
 # --- what to create -------------------------------------------------------------------------
 
@@ -104,9 +121,9 @@ class EventSpec:
     key: str
     title: str
     description: str
-    category: str
+    category: str  # one of CATEGORIES
     venue: str
-    days_ahead: int  # from today in Almaty; fixed once the event exists
+    day: int | str  # days from today in Almaty (< 0: past), or SATURDAY / SUNDAY
     hour: int  # local start time
     hours: int  # duration
     types: tuple[TypeSpec, ...]
@@ -116,6 +133,10 @@ class EventSpec:
     @property
     def has_paid(self) -> bool:
         return any(t.kind == TicketKind.PAID for t in self.types)
+
+    @property
+    def past(self) -> bool:
+        return isinstance(self.day, int) and self.day < 0
 
 
 @dataclass(frozen=True)
@@ -141,7 +162,20 @@ VENUES = (
     VenueSpec("Дворец Республики", "пр. Достык, 56", "Алматы"),
     VenueSpec("Astana Arena", "пр. Туран, 48", "Астана"),
     VenueSpec("Барыс Арена", "пр. Туран, 57", "Астана"),
+    VenueSpec("Камерный зал «Сазген»", "ул. Абая, 48", "Алматы"),
+    VenueSpec("Лекторий «Білім»", "ул. Сатпаева, 22", "Алматы"),
+    VenueSpec("Центр творчества «Шаңырақ»", "пр. Мангилик Ел, 31", "Астана"),
+    VenueSpec("Парк «Жастар»", "ул. Кенесары, 2", "Астана"),
 )
+
+
+def _free(name: str, quantity: int, description: str | None = None) -> TypeSpec:
+    return TypeSpec(name, TicketKind.FREE, 0, quantity, description)
+
+
+def _paid(name: str, price_kzt: int, quantity: int, description: str | None = None) -> TypeSpec:
+    return TypeSpec(name, TicketKind.PAID, price_kzt, quantity, description)
+
 
 EVENTS = (
     EventSpec(
@@ -151,7 +185,7 @@ EVENTS = (
         description="Бесплатная лекция и нетворкинг. Демо-событие ticketoff.",
         category="education",
         venue="Дворец Республики",
-        days_ahead=12,
+        day=12,
         hour=18,
         hours=2,
         types=(TypeSpec("Вход свободный", TicketKind.FREE, 0, 200),),
@@ -163,7 +197,7 @@ EVENTS = (
         description="Вечер симфонической музыки. Демо-событие ticketoff, оплата симулируется.",
         category="music",
         venue="Astana Arena",
-        days_ahead=19,
+        day=19,
         hour=19,
         hours=3,
         types=(TypeSpec("Стандарт", TicketKind.PAID, 5000, 300),),
@@ -175,7 +209,7 @@ EVENTS = (
         description="Джазовый фестиваль: несколько типов билетов. Демо-событие ticketoff.",
         category="music",
         venue="Almaty Arena",
-        days_ahead=26,
+        day=26,
         hour=17,
         hours=5,
         types=(
@@ -183,6 +217,187 @@ EVENTS = (
             TypeSpec("Стандарт", TicketKind.PAID, 8000, 400),
             TypeSpec("VIP", TicketKind.PAID, 25000, 50, "Места у сцены"),
         ),
+    ),
+    # --- BE-24: a fuller showcase (both cities, every category, dates around "today") ---
+    EventSpec(
+        key="standup",
+        title="Demo: Вечер стендапа: новые имена",
+        description="Молодые комики пробуют новый материал. 18+. Демо-событие ticketoff.",
+        category="other",
+        venue="Камерный зал «Сазген»",
+        day=0,
+        hour=20,
+        hours=2,
+        types=(_paid("Входной", 3000, 120),),
+    ),
+    EventSpec(
+        key="boardgames",
+        title="Demo: Вечер настольных игр",
+        description="Приходите с друзьями или одни: столы, правила и ведущие на месте.",
+        category="other",
+        venue="Лекторий «Білім»",
+        day=1,
+        hour=18,
+        hours=4,
+        types=(_paid("Участник", 1000, 40),),
+    ),
+    EventSpec(
+        key="theatre-tram",
+        title="Demo: Спектакль «Последний трамвай»",
+        description="Камерная драма о двух незнакомцах в ночном городе. Демо-событие ticketoff.",
+        category="theatre",
+        venue="Центр творчества «Шаңырақ»",
+        day=1,
+        hour=19,
+        hours=2,
+        types=(_paid("Партер", 6000, 150), _paid("Балкон", 3500, 80)),
+    ),
+    EventSpec(
+        key="morning-run",
+        title="Demo: Утренняя пробежка в парке",
+        description="Лёгкие 5 км в своём темпе, разминка с тренером. Вход свободный.",
+        category="sport",
+        venue="Парк «Жастар»",
+        day=SATURDAY,
+        hour=9,
+        hours=2,
+        types=(_free("Участник", 100),),
+    ),
+    EventSpec(
+        key="futsal-cup",
+        title="Demo: Городской кубок по мини-футболу",
+        description="Финальный день любительского турнира: полуфиналы и финал.",
+        category="sport",
+        venue="Almaty Arena",
+        day=SATURDAY,
+        hour=12,
+        hours=6,
+        types=(_paid("Трибуна", 1500, 500), _paid("Детский", 500, 200, "До 14 лет")),
+    ),
+    EventSpec(
+        key="kids-puss",
+        title="Demo: Детский спектакль «Кот в сапогах»",
+        description="Музыкальная сказка для детей от 4 лет. Демо-событие ticketoff.",
+        category="kids",
+        venue="Центр творчества «Шаңырақ»",
+        day=SUNDAY,
+        hour=11,
+        hours=1,
+        types=(_paid("Взрослый", 2000, 100), _paid("Детский", 1200, 100)),
+    ),
+    EventSpec(
+        key="art-opening",
+        title="Demo: Открытие выставки молодых художников",
+        description="Живопись и графика выпускников художественных школ. Вход свободный.",
+        category="other",
+        venue="Центр творчества «Шаңырақ»",
+        day=6,
+        hour=18,
+        hours=3,
+        types=(_free("Гость", 150),),
+    ),
+    EventSpec(
+        key="kids-robotics",
+        title="Demo: Мастерская для детей: собираем робота",
+        description="Детям 8–12 лет: собираем и программируем простого робота. Наборы выдаём.",
+        category="kids",
+        venue="Лекторий «Білім»",
+        day=9,
+        hour=11,
+        hours=2,
+        types=(_free("Участник", 30),),
+    ),
+    EventSpec(
+        key="python-meetup",
+        title="Demo: Митап разработчиков Python",
+        description="Три доклада о бэкенде и данных, потом нетворкинг. Вход свободный.",
+        category="education",
+        venue="Центр творчества «Шаңырақ»",
+        day=14,
+        hour=19,
+        hours=3,
+        types=(_free("Участник", 80),),
+    ),
+    EventSpec(
+        key="dombra",
+        title="Demo: Домбыра кеші: дала әуендері",
+        description="Домбыра мен қобызға арналған кеш. Билеттер аз қалды. Демо-событие ticketoff.",
+        category="music",
+        venue="Камерный зал «Сазген»",
+        day=16,
+        hour=19,
+        hours=2,
+        types=(_paid("Зал", 4000, 6),),
+    ),
+    EventSpec(
+        key="photo-class",
+        title="Demo: Мастер-класс по уличной фотографии",
+        description="Теория утром, съёмка в городе днём, разбор снимков вечером. Мест мало.",
+        category="education",
+        venue="Лекторий «Білім»",
+        day=23,
+        hour=10,
+        hours=8,
+        types=(_paid("Участник", 7000, 5),),
+    ),
+    EventSpec(
+        key="rock-fest",
+        title="Demo: Рок-фестиваль «Степной ветер»",
+        description="Шесть молодых групп на одной сцене. Демо-событие ticketoff.",
+        category="music",
+        venue="Almaty Arena",
+        day=30,
+        hour=16,
+        hours=7,
+        types=(
+            _paid("Танцпол", 9000, 800),
+            _paid("Фан-зона", 15000, 200, "У сцены"),
+            _paid("VIP", 25000, 40, "Отдельный вход и лаунж"),
+        ),
+    ),
+    EventSpec(
+        key="ballet",
+        title="Demo: Балет «Лебединое озеро»",
+        description="Классический балет в двух действиях. Демо-событие ticketoff.",
+        category="theatre",
+        venue="Барыс Арена",
+        day=37,
+        hour=19,
+        hours=3,
+        types=(_paid("Партер", 12000, 400), _paid("Амфитеатр", 7000, 600)),
+    ),
+    EventSpec(
+        key="half-marathon",
+        title="Demo: Ночной полумарафон",
+        description="21 км по вечернему городу, есть дистанция 5 км. Слот участника с номером.",
+        category="sport",
+        venue="Парк «Жастар»",
+        day=42,
+        hour=20,
+        hours=4,
+        types=(_paid("21 км", 5000, 500), _paid("5 км", 2500, 500)),
+    ),
+    EventSpec(
+        key="past-hackathon",
+        title="Demo: Осенний хакатон",
+        description="24 часа на прототип в командах до 4 человек. Прошедшее демо-событие.",
+        category="education",
+        venue="Лекторий «Білім»",
+        day=-12,
+        hour=10,
+        hours=24,
+        types=(_free("Участник", 60),),
+    ),
+    EventSpec(
+        key="past-chamber",
+        title="Demo: Камерный концерт «Осенние мелодии»",
+        description="Струнный квартет и фортепиано. Прошедшее демо-событие.",
+        category="music",
+        venue="Astana Arena",
+        day=-26,
+        hour=19,
+        hours=2,
+        types=(_paid("Стандарт", 4500, 200),),
     ),
 )
 
@@ -208,6 +423,25 @@ TICKETS = (
     ),
     TicketSpec("multi-vip", "multi", "VIP", "Демо VIP", TicketStatus.VALID),
     TicketSpec("multi-standard", "multi", "Стандарт", "Демо Стандарт", TicketStatus.VALID),
+    # Almost sold out: 2 of 6 and 2 of 5 left.
+    *(
+        TicketSpec(f"dombra-{n}", "dombra", "Зал", f"Демо Слушатель {n}", TicketStatus.VALID)
+        for n in range(1, 5)
+    ),
+    *(
+        TicketSpec(
+            f"photo-{n}", "photo-class", "Участник", f"Демо Фотограф {n}", TicketStatus.VALID
+        )
+        for n in range(1, 4)
+    ),
+    # History of the past events: sold and scanned before they moved into the past.
+    TicketSpec(
+        "hackathon-1", "past-hackathon", "Участник", "Демо Хакер 1", TicketStatus.CHECKED_IN
+    ),
+    TicketSpec(
+        "hackathon-2", "past-hackathon", "Участник", "Демо Хакер 2", TicketStatus.CHECKED_IN
+    ),
+    TicketSpec("chamber-1", "past-chamber", "Стандарт", "Демо Слушатель", TicketStatus.CHECKED_IN),
 )
 
 PROMOS = (PromoSpec("paid", "Demo: скидка 20%", 20, "DEMO20"),)
@@ -321,9 +555,33 @@ def _ensure_venues(session: Session, result: SeedResult) -> dict[str, Venue]:
     return venues
 
 
-def _start_at(spec: EventSpec) -> datetime:
-    day = datetime.now(TZ).date() + timedelta(days=spec.days_ahead)
-    return datetime(day.year, day.month, day.day, spec.hour, tzinfo=TZ)
+def _event_day(spec: EventSpec, today: date) -> date:
+    if spec.day == SATURDAY:
+        return today + timedelta(days=(5 - today.weekday()) % 7)
+    if spec.day == SUNDAY:
+        return today + timedelta(days=(6 - today.weekday()) % 7)
+    assert isinstance(spec.day, int)
+    return today + timedelta(days=spec.day)
+
+
+def _start_at(spec: EventSpec, *, staging: bool = False) -> datetime:
+    """Local start on the spec's day. A future event that would start within START_LEAD
+    (today's, seeded in the evening) starts at the next full hour after it instead.
+
+    staging: where a past event is created (tomorrow) before it is moved into the past.
+    """
+    now = _now().astimezone(TZ)
+    day = now.date() + timedelta(days=1) if staging else _event_day(spec, now.date())
+    start = datetime(day.year, day.month, day.day, spec.hour, tzinfo=TZ)
+    if not spec.past or staging:
+        earliest = now + START_LEAD
+        if start < earliest:
+            start = earliest.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+    return start
+
+
+def _local_day(value: datetime) -> date:
+    return value.astimezone(TZ).date()
 
 
 def _find_event(session: Session, organizer: OrganizerProfile, title: str) -> Event | None:
@@ -354,7 +612,7 @@ def _ensure_event(
             )
             result.created.append(f"renamed {old_title!r} -> {spec.title!r}")
     if event is None:
-        start = _start_at(spec)
+        start = _start_at(spec, staging=spec.past)
         payload = EventCreate(
             title=spec.title,
             description=spec.description,
@@ -367,6 +625,39 @@ def _ensure_event(
         event = events_service.create_event(session, organizer, payload)
         result.created.append(f"event {spec.title}")
     return event
+
+
+def _redate(
+    session: Session, result: SeedResult, event: Event, spec: EventSpec, organizer_user: User
+) -> None:
+    """--relative-dates for a future spec: back to its day counted from today."""
+    start = _start_at(spec)
+    if _local_day(event.start_at) == start.date():
+        return
+    events_service.update_event(
+        session,
+        event,
+        EventUpdate(start_at=start, end_at=start + timedelta(hours=spec.hours)),
+        organizer_user,
+    )
+    result.created.append(f"moved {spec.title} to {start:%Y-%m-%d %H:%M}")
+
+
+def _move_into_past(
+    session: Session, result: SeedResult, event: Event, spec: EventSpec, relative: bool
+) -> None:
+    """A past spec's event: created ahead, sold and scanned, then its dates set here.
+
+    A direct write on purpose: the API refuses to move a published event into the past.
+    Moves it once (still in the future), or with --relative-dates when its day differs.
+    """
+    start = _start_at(spec)
+    if event.start_at < _now() and not (relative and _local_day(event.start_at) != start.date()):
+        return
+    event.start_at = start
+    event.end_at = start + timedelta(hours=spec.hours)
+    session.commit()
+    result.created.append(f"moved {spec.title} into the past ({start:%Y-%m-%d})")
 
 
 def _ensure_ticket_types(
@@ -538,12 +829,18 @@ def _ensure_ticket(
     ticket_type: TicketType,
     actors: _Actors,
     reset_scans: bool,
+    ended: bool = False,
 ) -> None:
+    """ended: the event is over (a past spec on a later run): report its ticket, change nothing."""
     ticket = _find_ticket(session, actors.buyer, event, spec.attendee)
+    if ticket is None and ended:
+        result.warnings.append(f"ticket {spec.label} missing on an ended event: not issued")
+        return
     if ticket is None:
         ticket = session.get(Ticket, _issue_ticket(session, actors.buyer, event, ticket_type, spec))
         result.created.append(f"ticket {spec.label}")
-    _bring_to_status(session, result, spec, event, ticket, actors, reset_scans)
+    if not ended:
+        _bring_to_status(session, result, spec, event, ticket, actors, reset_scans)
     session.refresh(ticket)
     result.tickets.append(
         TicketOutRow(
@@ -600,7 +897,20 @@ def _ensure_promo(
     )
 
 
-def run(session: Session, *, password: str | None, reset_scans: bool = False) -> SeedResult:
+def _types_of(session: Session, event: Event) -> dict[str, TicketType]:
+    return {
+        tt.name: tt
+        for tt in session.scalars(select(TicketType).where(TicketType.event_id == event.id))
+    }
+
+
+def run(
+    session: Session,
+    *,
+    password: str | None,
+    reset_scans: bool = False,
+    relative_dates: bool = False,
+) -> SeedResult:
     """Create whatever demo data is missing. Every service call commits on its own."""
     if password is not None and len(password) < MIN_PASSWORD_LENGTH:
         raise SeedError(f"DEMO_PASSWORD must be at least {MIN_PASSWORD_LENGTH} characters")
@@ -613,14 +923,21 @@ def run(session: Session, *, password: str | None, reset_scans: bool = False) ->
     venues = _ensure_venues(session, result)
 
     types_by_event: dict[str, dict[str, TicketType]] = {}
+    ended: set[str] = set()  # past specs already moved into the past
     for spec in EVENTS:
         event = _ensure_event(session, result, organizer, organizer_user, venues[spec.venue], spec)
         result.events[spec.key] = event
         if event.status in _CLOSED:
             result.warnings.append(f"{spec.title} is {event.status}: left as is")
             continue
+        if relative_dates and not spec.past:
+            _redate(session, result, event, spec, organizer_user)
         if (event.end_at or event.start_at) < _now():
-            result.warnings.append(f"{spec.title} is in the past: left as is")
+            if spec.past:
+                types_by_event[spec.key] = _types_of(session, event)
+                ended.add(spec.key)
+            else:
+                result.warnings.append(f"{spec.title} is in the past: left as is")
             continue
         # Types before publishing: publish requires a visible ticket type (FX-4).
         types_by_event[spec.key] = _ensure_ticket_types(session, result, organizer, event, spec)
@@ -651,7 +968,17 @@ def run(session: Session, *, password: str | None, reset_scans: bool = False) ->
             types[ticket_spec.ticket_type],
             actors,
             reset_scans,
+            ended=ticket_spec.event in ended,
         )
+
+    # Last: the past specs' events, once their tickets are sold and scanned (an interrupted
+    # run leaves them in the future, so the next run can finish the tickets first).
+    status_of = {row.label: row.status for row in result.tickets}
+    for spec in EVENTS:
+        event = result.events[spec.key]
+        ready = all(status_of.get(t.label) == t.status for t in TICKETS if t.event == spec.key)
+        if spec.past and event.status not in _CLOSED and ready:
+            _move_into_past(session, result, event, spec, relative_dates)
     return result
 
 
@@ -708,10 +1035,14 @@ def print_summary(result: SeedResult, *, print_tokens: bool) -> None:
         print(f"  {venue.id}  {venue.name}, {venue.city}")
 
     print("\nevents:")
+    city_of = {venue.id: venue.city for venue in result.venues}
     for event in result.events.values():
         paid = " paid_sales_active" if event.paid_sales_active else ""
         local = event.start_at.astimezone(TZ).strftime("%Y-%m-%d %H:%M")
-        print(f"  {event.id}  {event.title}  [{event.status}{paid}]  {local} {TZ_NAME}")
+        print(
+            f"  {event.id}  {event.title}  [{event.status}{paid}]  {local} {TZ_NAME}"
+            f"  {event.category} / {city_of.get(event.venue_id)}"
+        )
 
     print("\ntickets (buyer " + BUYER_EMAIL + "):")
     for row in result.tickets:
@@ -737,6 +1068,11 @@ class NoEmailProvider:
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Create idempotent ticketoff demo data.")
+    parser.add_argument(
+        "--relative-dates",
+        action="store_true",
+        help="move demo events whose day differs back to today + their offset (before a demo)",
+    )
     parser.add_argument("--print-tokens", action="store_true", help="print ticket QR tokens")
     parser.add_argument("--qr-dir", type=Path, help="save a QR PNG per demo ticket here")
     parser.add_argument(
@@ -752,7 +1088,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     notifications.set_provider(NoEmailProvider())
     with SessionLocal() as session:
         try:
-            result = run(session, password=password, reset_scans=args.reset_scans)
+            result = run(
+                session,
+                password=password,
+                reset_scans=args.reset_scans,
+                relative_dates=args.relative_dates,
+            )
         except SeedError as exc:
             print(f"seed failed: {exc}", file=sys.stderr)
             return 1

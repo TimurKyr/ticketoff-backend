@@ -100,8 +100,9 @@ docker compose -f docker-compose.prod.yml exec -T db \
 ## Demo data
 
 `app/scripts/seed_demo.py` creates venues (Almaty, Astana), a demo organizer, scanner and buyer,
-three published `Demo: ...` events (free, paid with active paid sales, several ticket types), a
-promo campaign with the code `DEMO20` (20% off) and demo tickets in every scanner state (valid,
+19 published `Demo: ...` events (BE-24: both cities, categories `music`, `theatre`, `education`,
+`sport`, `kids`, `other`; today, tomorrow, the nearest weekend, the next 2-6 weeks and two past
+events with scanned tickets; free and paid, two of them almost sold out), a promo campaign with the code `DEMO20` (20% off) and demo tickets in every scanner state (valid,
 checked in, cancelled, refunded, bought with the promo code, another event). It is idempotent:
 running it again creates nothing; demo events from an older seed (titles without `Demo: `) are
 renamed, and tickets left valid by an interrupted run are brought to their demo status.
@@ -116,6 +117,9 @@ docker compose -f docker-compose.prod.yml exec -e DEMO_PASSWORD='<password>' api
   per ticket (and `promo-DEMO20.png`) inside
   the container (copy out with `docker compose -f docker-compose.prod.yml cp api:/tmp/demo-qr .`).
 - `--reset-scans` makes the demo tickets that should be valid valid again after a scanner demo.
+- `--relative-dates` moves every open demo event whose day differs back to today + its offset
+  (run it on the morning of a demo, so "today" and "this weekend" are right). Without it, events
+  keep the dates of the run that created them.
 
 ## Platform admin
 

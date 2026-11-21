@@ -16,6 +16,7 @@ from app.modules.admin.schemas import (
     SearchPage,
     SearchType,
 )
+from app.modules.events import service as events_service
 from app.modules.events.models import Event
 from app.modules.events.schemas import EventOut
 from app.modules.identity.dependencies import SessionDep, require_platform_admin
@@ -35,14 +36,18 @@ admin_router = APIRouter(
 def suspend_event(event_id: uuid.UUID, admin: AdminDep, session: SessionDep) -> Event:
     """Free registration, checkout and pay answer 409 until unsuspended. Tickets already
     issued stay valid and scan at the door. Repeating it changes nothing."""
-    return service.set_event_sales_suspended(session, admin, event_id, True)
+    event = service.set_event_sales_suspended(session, admin, event_id, True)
+    events_service.annotate_on_sale(session, [event])
+    return event
 
 
 @admin_router.post(
     "/events/{event_id}/unsuspend", response_model=EventOut, summary="Restore sales of an event"
 )
 def unsuspend_event(event_id: uuid.UUID, admin: AdminDep, session: SessionDep) -> Event:
-    return service.set_event_sales_suspended(session, admin, event_id, False)
+    event = service.set_event_sales_suspended(session, admin, event_id, False)
+    events_service.annotate_on_sale(session, [event])
+    return event
 
 
 @admin_router.post(
