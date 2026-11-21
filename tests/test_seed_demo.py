@@ -7,6 +7,7 @@ that was already seeded by hand does not change what the tests see.
 
 import dataclasses
 import uuid
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -146,8 +147,9 @@ def test_promo_code_and_discounted_ticket(db_session: Session, fresh: str) -> No
 
 def test_old_titles_are_renamed_not_duplicated(db_session: Session, fresh: str) -> None:
     first = seed_demo.run(db_session, password=PASSWORD)
+    renamed = [spec for spec in seed_demo.EVENTS if spec.old_titles]
     # Back to the titles the first seed (#19) used, as on production.
-    for spec in seed_demo.EVENTS:
+    for spec in renamed:
         db_session.execute(
             update(Event)
             .where(Event.id == first.events[spec.key].id)
@@ -161,11 +163,11 @@ def test_old_titles_are_renamed_not_duplicated(db_session: Session, fresh: str) 
     after = _counts(db_session)
     assert after["events"] == before["events"]
     assert after["tickets"] == before["tickets"]
-    for spec in seed_demo.EVENTS:
+    for spec in renamed:
         event = db_session.get(Event, first.events[spec.key].id)
         assert event.title == spec.title
         assert second.events[spec.key].id == event.id
-    assert sum(line.startswith("renamed ") for line in second.created) == len(seed_demo.EVENTS)
+    assert sum(line.startswith("renamed ") for line in second.created) == len(renamed)
 
 
 def test_interrupted_run_is_finished_next_time(
@@ -280,3 +282,100 @@ def test_main_never_emails_the_demo_accounts(monkeypatch: pytest.MonkeyPatch) ->
 
     assert seed_demo.main([]) == 0
     assert isinstance(seen[0], seed_demo.NoEmailProvider)
+
+
+def test_showcase_covers_cities_categories_dates_and_prices(
+    db_session: Session, session_api: TestClient, fresh: str
+) -> None:
+    # BE-24: what the storefront needs. Checked through GET /events like the web does.
+    result = seed_demo.run(db_session, password=PASSWORD)
+    assert 15 <= len(seed_demo.EVENTS) <= 20
+    past = {spec.key for spec in seed_demo.EVENTS if spec.past}
+    assert len(past) == 2
+    assert {spec.category for spec in seed_demo.EVENTS} == set(seed_demo.CATEGORIES)
+
+    ids = {str(e.id) for e in result.events.values()}
+
+    def listed_ours(**params: object) -> list[dict]:
+        # The test database may hold other events: walk every page.
+        items, offset = [], 0
+        while True:
+            page = session_api.get("/events", params={"limit": 100, "offset": offset, **params})
+            items += page.json()["items"]
+            offset += 100
+            if offset >= page.json()["total"]:
+                return [item for item in items if item["id"] in ids]
+
+    listed = listed_ours()
+    assert len(listed) == len(seed_demo.EVENTS) - len(past)
+    venues = {str(v.id): v.city for v in result.venues}
+    assert {venues[item["venue_id"]] for item in listed} == {"Алматы", "Астана"}
+    assert len({item["category"] for item in listed}) >= 5
+    prices = [item["price_from"] for item in listed]
+    assert 5 <= prices.count(0) <= 6
+    assert all(p is not None and (p == 0 or 500 <= p <= 25000) for p in prices)
+    assert sum(item["availability"] == "few_left" for item in listed) in (1, 2)
+
+    almaty = listed_ours(city="Алматы")
+    assert almaty
+    assert {venues[item["venue_id"]] for item in almaty} == {"Алматы"}
+
+    today = datetime.now(seed_demo.TZ).date()
+    days = {
+        (e.start_at.astimezone(seed_demo.TZ).date() - today).days for e in result.events.values()
+    }
+    assert {0, 1} <= days
+    for key in past:
+        event = result.events[key]
+        assert event.end_at < datetime.now(UTC)
+        assert event.status == EventStatus.PUBLISHED
+    statuses = {t.label: t.status for t in result.tickets}
+    assert statuses["hackathon-1"] == TicketStatus.CHECKED_IN
+    assert statuses["chamber-1"] == TicketStatus.CHECKED_IN
+
+
+def test_relative_dates_move_events_back(db_session: Session, fresh: str) -> None:
+    first = seed_demo.run(db_session, password=PASSWORD)
+    # As if seeded ten days ago: everything is ten days earlier now.
+    shift = timedelta(days=10)
+    for event in first.events.values():
+        db_session.execute(
+            update(Event)
+            .where(Event.id == event.id)
+            .values(start_at=Event.start_at - shift, end_at=Event.end_at - shift)
+        )
+    db_session.flush()
+    db_session.expire_all()
+
+    plain = seed_demo.run(db_session, password=PASSWORD)
+    assert not any(line.startswith("moved") for line in plain.created)
+
+    moved = seed_demo.run(db_session, password=PASSWORD, relative_dates=True)
+    assert moved.warnings == []
+    today = datetime.now(seed_demo.TZ).date()
+    for spec in seed_demo.EVENTS:
+        event = db_session.get(Event, first.events[spec.key].id)
+        day = event.start_at.astimezone(seed_demo.TZ).date()
+        assert day == seed_demo._start_at(spec).date(), spec.key
+        if isinstance(spec.day, int) and spec.day > 0:
+            assert (day - today).days == spec.day
+    before = _counts(db_session)
+    again = seed_demo.run(db_session, password=PASSWORD, relative_dates=True)
+    assert again.created == []
+    assert _counts(db_session) == before
+
+
+def test_today_event_seeded_late_still_starts_in_the_future(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    late = datetime(2026, 11, 26, 22, 30, tzinfo=seed_demo.TZ)
+    monkeypatch.setattr(seed_demo, "_now", lambda: late.astimezone(UTC))
+    today = next(s for s in seed_demo.EVENTS if s.day == 0)
+    assert seed_demo._start_at(today) == datetime(2026, 11, 27, 0, 0, tzinfo=seed_demo.TZ)
+    tomorrow = next(s for s in seed_demo.EVENTS if s.day == 1)
+    assert seed_demo._start_at(tomorrow).date().isoformat() == "2026-11-27"
+    # 26.11.2026 is a Thursday: the weekend is 28-29.11.
+    saturday = next(s for s in seed_demo.EVENTS if s.day == seed_demo.SATURDAY)
+    assert seed_demo._start_at(saturday).date().isoformat() == "2026-11-28"
+    past = next(s for s in seed_demo.EVENTS if s.past)
+    assert seed_demo._start_at(past) < late
