@@ -414,6 +414,215 @@ def test_two_simultaneous_scans_admit_once(client: TestClient, door: Door) -> No
     assert sorted(results) == ["already_used", "checked_in"]
 
 
+# --- manual check-in by ticket id ---------------------------------------------------------------
+
+
+def _check_in(client: TestClient, ticket_id: uuid.UUID, headers: Headers) -> dict:
+    response = client.post(f"/checkin/tickets/{ticket_id}/check-in", headers=headers)
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def test_manual_check_in_admits_once_and_is_audited(
+    client: TestClient, door: Door, db: Session
+) -> None:
+    ticket = door.add_ticket(name="Aigerim")
+    door.add_ticket()  # a second guest who has not arrived
+
+    first = _check_in(client, ticket.id, door.staff)
+    second = _check_in(client, ticket.id, door.staff)
+
+    assert first["result"] == "checked_in"
+    assert first["ticket"]["attendee_name"] == "Aigerim"
+    assert first["ticket"]["status"] == "checked_in"
+    assert (first["checked_in_count"], first["total_count"]) == (1, 2)
+    assert second["result"] == "already_used"
+    assert second["checked_in_count"] == 1
+    # The QR of a guest admitted by hand is used too.
+    assert _scan(client, door, ticket.qr_token)["result"] == "already_used"
+    record = db.scalar(select(CheckInRecord).where(CheckInRecord.ticket_id == ticket.id))
+    assert record.event_admin_id == door.staff_user.id
+    audit = db.scalar(
+        select(AuditLog).where(
+            AuditLog.entity_id == ticket.id, AuditLog.action_type == "ticket.checked_in"
+        )
+    )
+    assert audit.details["method"] == "manual"
+    assert audit.event_id == door.event.id
+
+
+def test_scan_is_audited_as_qr(client: TestClient, door: Door, db: Session) -> None:
+    ticket = door.add_ticket()
+    _scan(client, door, ticket.qr_token)
+
+    audit = db.scalar(
+        select(AuditLog).where(
+            AuditLog.entity_id == ticket.id, AuditLog.action_type == "ticket.checked_in"
+        )
+    )
+    assert audit.details["method"] == "qr"
+
+
+def test_owner_may_check_in_by_hand(client: TestClient, door: Door) -> None:
+    ticket = door.add_ticket()
+
+    assert _check_in(client, ticket.id, door.owner)["result"] == "checked_in"
+
+
+def test_manual_check_in_of_a_foreign_or_unknown_ticket_is_404(
+    client: TestClient, door: Door, db: Session
+) -> None:
+    ticket = door.add_ticket()
+    # Staff of another event may not admit this event's guests.
+    other_owner, _ = _user(db, organizer=True)
+    other_event = _make_event(db, other_owner)
+    db.add(StaffAssignment(event_id=other_event.id, user_id=door.staff_user.id))
+    other_staff_user, other_staff = _user(db)
+    db.add(StaffAssignment(event_id=other_event.id, user_id=other_staff_user.id))
+    db.commit()
+
+    for headers in (door.outsider, other_staff):
+        foreign = client.post(f"/checkin/tickets/{ticket.id}/check-in", headers=headers)
+        assert (foreign.status_code, foreign.json()) == (404, {"detail": "Ticket not found"})
+    unknown = client.post(f"/checkin/tickets/{uuid.uuid4()}/check-in", headers=door.staff)
+    assert (unknown.status_code, unknown.json()) == (404, {"detail": "Ticket not found"})
+    db.expire_all()
+    assert db.get(Ticket, ticket.id).status == TicketStatus.VALID
+
+
+def test_manual_check_in_requires_login(client: TestClient, door: Door) -> None:
+    ticket = door.add_ticket()
+
+    assert client.post(f"/checkin/tickets/{ticket.id}/check-in").status_code == 401
+
+
+@pytest.mark.parametrize("status", [TicketStatus.CANCELLED, TicketStatus.REFUNDED])
+def test_manual_check_in_refuses_cancelled_and_refunded_tickets(
+    client: TestClient, door: Door, db: Session, status: TicketStatus
+) -> None:
+    ticket = door.add_ticket(status=status)
+
+    body = _check_in(client, ticket.id, door.staff)
+
+    assert body["result"] == status.value
+    assert body["ticket"]["status"] == status.value
+    assert (body["checked_in_count"], body["total_count"]) == (0, 0)
+    assert db.scalar(select(CheckInRecord).where(CheckInRecord.ticket_id == ticket.id)) is None
+
+
+def test_manual_check_in_on_a_cancelled_event_admits_nobody(
+    client: TestClient, door: Door, db: Session
+) -> None:
+    ticket = door.add_ticket()
+    _set_status(db, door.event, EventStatus.CANCELLED)
+
+    body = _check_in(client, ticket.id, door.staff)
+
+    assert body["result"] == "event_cancelled"
+    assert body["ticket"] is None
+    db.expire_all()
+    assert db.get(Ticket, ticket.id).status == TicketStatus.VALID
+
+
+def test_manual_check_in_on_a_draft_event_is_invalid(
+    client: TestClient, door: Door, db: Session
+) -> None:
+    ticket = door.add_ticket()
+    _set_status(db, door.event, EventStatus.DRAFT)
+
+    assert _check_in(client, ticket.id, door.staff)["result"] == "invalid"
+
+
+@postgres_only
+def test_undo_then_manual_check_in_admits_again(
+    client: TestClient, door: Door, db: Session
+) -> None:
+    ticket = door.add_ticket()
+    _check_in(client, ticket.id, door.staff)
+    undo = client.post(f"/checkin/tickets/{ticket.id}/undo", headers=door.staff)
+    assert undo.status_code == 200
+
+    again = _check_in(client, ticket.id, door.staff)
+
+    assert again["result"] == "checked_in"
+    assert again["checked_in_count"] == 1
+    records = db.scalars(select(CheckInRecord).where(CheckInRecord.ticket_id == ticket.id)).all()
+    assert sorted(r.is_reversed for r in records) == [False, True]
+
+
+@postgres_only
+def test_manual_check_in_checks_access_before_locking_the_ticket(
+    client: TestClient, door: Door
+) -> None:
+    ticket = door.add_ticket()
+    statuses: list[int] = []
+    with SessionLocal() as holder:
+        checkin_repository.get_ticket_for_update(holder, ticket.id)  # held until rollback
+        thread = threading.Thread(
+            target=lambda: statuses.append(
+                client.post(
+                    f"/checkin/tickets/{ticket.id}/check-in", headers=door.outsider
+                ).status_code
+            )
+        )
+        thread.start()
+        thread.join(timeout=2)
+        answered_while_locked = not thread.is_alive()
+        holder.rollback()
+    thread.join(timeout=10)
+
+    assert answered_while_locked, "check-in waited for the lock before checking access"
+    assert statuses == [404]
+
+
+@postgres_only
+def test_two_simultaneous_manual_check_ins_admit_once(
+    client: TestClient, door: Door, db: Session
+) -> None:
+    ticket = door.add_ticket()
+    results: list[str] = []
+    barrier = threading.Barrier(2)
+
+    def check_in_once(headers: Headers) -> None:
+        barrier.wait()
+        results.append(_check_in(client, ticket.id, headers)["result"])
+
+    threads = [threading.Thread(target=check_in_once, args=(h,)) for h in (door.staff, door.owner)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert sorted(results) == ["already_used", "checked_in"]
+    assert (
+        len(db.scalars(select(CheckInRecord).where(CheckInRecord.ticket_id == ticket.id)).all())
+        == 1
+    )
+
+
+@postgres_only
+def test_manual_check_in_racing_a_scan_admits_once(client: TestClient, door: Door) -> None:
+    ticket = door.add_ticket()
+    results: list[str] = []
+    barrier = threading.Barrier(2)
+
+    def by_hand() -> None:
+        barrier.wait()
+        results.append(_check_in(client, ticket.id, door.owner)["result"])
+
+    def by_qr() -> None:
+        barrier.wait()
+        results.append(_scan(client, door, ticket.qr_token)["result"])
+
+    threads = [threading.Thread(target=by_hand), threading.Thread(target=by_qr)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert sorted(results) == ["already_used", "checked_in"]
+
+
 # --- staff management -----------------------------------------------------------------------
 
 

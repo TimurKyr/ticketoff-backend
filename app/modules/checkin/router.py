@@ -53,6 +53,17 @@ def scan(payload: ScanIn, user: CurrentUser, session: SessionDep) -> ScanOut:
 
 
 @checkin_router.post(
+    "/tickets/{ticket_id}/check-in",
+    response_model=ScanOut,
+    summary="Check in a guest by ticket id",
+    responses={404: {"description": "Unknown ticket, or one the caller may not scan"}},
+)
+def check_in(ticket_id: uuid.UUID, user: CurrentUser, session: SessionDep) -> ScanOut:
+    """Manual check-in of a guest found via /attendees; same results as /scan, always 200."""
+    return service.check_in_ticket(session, user, ticket_id)
+
+
+@checkin_router.post(
     "/tickets/{ticket_id}/undo", response_model=ScannedTicket, summary="Undo a mistaken check-in"
 )
 def undo(ticket_id: uuid.UUID, user: CurrentUser, session: SessionDep) -> ScannedTicket:
