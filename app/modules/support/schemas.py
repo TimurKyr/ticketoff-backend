@@ -63,6 +63,11 @@ class CaseOut(BaseModel):
     order_id: uuid.UUID | None
     ticket_id: uuid.UUID | None
     created_at: datetime
+    # For display (FE-8): users have no name, so the opener is shown by email. Only people
+    # who can see the case (its opener or a handler) ever get it.
+    opener_email: str
+    # None when the case has no event (an organizer case may have none).
+    event_title: str | None
 
 
 class CaseDetailOut(CaseOut):

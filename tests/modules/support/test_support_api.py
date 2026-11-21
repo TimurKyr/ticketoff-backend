@@ -10,10 +10,11 @@ from dataclasses import dataclass
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import event as sa_event
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core.db import get_session
+from app.core.db import engine, get_session
 from app.main import app
 from app.modules.events.enums import EventStatus
 from app.modules.events.models import Event
@@ -597,3 +598,129 @@ def test_an_admin_reply_notifies_the_organizer_who_opened_the_case(
 
     assert support_notifications(db_session, organizer) == ["support_reply"]
     assert support_notifications(db_session, admin) == []
+
+
+# --- display fields: opener_email and event_title (FE-8) ---
+
+
+def items(api: TestClient, who: Account, path: str, **params: object) -> list[dict]:
+    response = api.get(path, params=params, headers=who.headers)
+    assert response.status_code == 200, response.text
+    return response.json()["items"]
+
+
+def by_id(rows: list[dict]) -> dict[str, dict]:
+    return {row["id"]: row for row in rows}
+
+
+# --- the fields on every case response ---
+
+
+def test_my_cases_and_detail_show_opener_email_and_event_title(
+    api: TestClient, buyer: Account, event: Event
+) -> None:
+    opened = attendee_case(api, buyer, event)
+
+    assert (opened["opener_email"], opened["event_title"]) == (buyer.user.email, event.title)
+    [mine] = items(api, buyer, "/support/cases")
+    assert (mine["opener_email"], mine["event_title"]) == (buyer.user.email, event.title)
+    detail = get_case(api, buyer, opened["id"]).json()
+    assert (detail["opener_email"], detail["event_title"]) == (buyer.user.email, event.title)
+    assert len(detail["messages"]) == 1
+
+
+def test_organizer_inbox_shows_the_buyers_email_and_event_title(
+    api: TestClient, buyer: Account, organizer: Account, event: Event
+) -> None:
+    case = attendee_case(api, buyer, event)
+
+    [row] = items(api, organizer, "/support/inbox")
+    assert row["id"] == case["id"]
+    assert (row["opener_email"], row["event_title"]) == (buyer.user.email, event.title)
+
+
+def test_admin_inbox_shows_both_kinds_and_null_title_without_event(
+    api: TestClient, buyer: Account, organizer: Account, admin: Account, event: Event
+) -> None:
+    attendee = attendee_case(api, buyer, event)
+    # An organizer asking the platform about nothing in particular: no event.
+    platform = open_case(api, organizer, kind="organizer", category="payment")
+    assert platform["event_id"] is None and platform["event_title"] is None
+
+    rows = by_id(items(api, admin, "/support/inbox", limit=100))
+    assert rows[attendee["id"]]["opener_email"] == buyer.user.email
+    assert rows[attendee["id"]]["event_title"] == event.title
+    assert rows[platform["id"]]["opener_email"] == organizer.user.email
+    assert rows[platform["id"]]["event_title"] is None
+    detail = get_case(api, admin, platform["id"]).json()
+    assert (detail["opener_email"], detail["event_title"]) == (organizer.user.email, None)
+
+
+def test_assign_and_status_responses_carry_the_fields(
+    api: TestClient, buyer: Account, organizer: Account, event: Event
+) -> None:
+    case = attendee_case(api, buyer, event)
+
+    assigned = api.post(f"/support/cases/{case['id']}/assign", headers=organizer.headers).json()
+    resolved = api.patch(
+        f"/support/cases/{case['id']}/status",
+        json={"status": "resolved"},
+        headers=organizer.headers,
+    ).json()
+
+    for out in (assigned, resolved):
+        assert (out["opener_email"], out["event_title"]) == (buyer.user.email, event.title)
+
+
+def test_another_organizers_inbox_shows_nothing_of_it(
+    api: TestClient, buyer: Account, event: Event, make_account: Callable[..., Account]
+) -> None:
+    attendee_case(api, buyer, event)
+    stranger = make_account(organizer=True)
+
+    assert items(api, stranger, "/support/inbox") == []
+
+
+# --- no query per case ---
+
+
+def _list_statements(api: TestClient, who: Account, path: str) -> int:
+    statements: list[str] = []
+
+    def count(conn, cursor, statement, parameters, context, executemany) -> None:
+        statements.append(statement)
+
+    sa_event.listen(engine, "before_cursor_execute", count)
+    try:
+        rows = items(api, who, path, limit=100)
+    finally:
+        sa_event.remove(engine, "before_cursor_execute", count)
+    assert all(r["opener_email"] and r["event_title"] for r in rows)
+    return len(statements)
+
+
+@pytest.mark.parametrize("path", ["/support/cases", "/support/inbox"])
+def test_listing_10_cases_runs_as_many_queries_as_2(
+    api: TestClient,
+    db_session: Session,
+    make_account: Callable[..., Account],
+    path: str,
+) -> None:
+    counts = []
+    for n in (2, 10):
+        org = make_account(organizer=True)
+        me = make_account()
+        assert org.organizer is not None
+        for i in range(n):
+            # Each case has its own event, and in the inbox its own opener too, so a load per
+            # case (of the title or of the opener's email) would add statements. My own
+            # cases all have me as the opener by definition.
+            ev = create_event(db_session, org.organizer)
+            ev.title = f"Event {i}"
+            db_session.flush()
+            attendee_case(api, me if path == "/support/cases" else make_account(), ev)
+        db_session.expire_all()
+        who = me if path == "/support/cases" else org
+        counts.append(_list_statements(api, who, path))
+
+    assert counts[0] == counts[1], f"{counts[0]} statements for 2 cases, {counts[1]} for 10"
