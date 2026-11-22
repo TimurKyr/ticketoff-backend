@@ -255,11 +255,6 @@ def pay_order(
 
 # --- refunding a paid order (BE-19) ---
 
-_NOT_REFUNDABLE = {
-    OrderStatus.REFUNDED: "Order is already refunded",
-    OrderStatus.CANCELLED: "Order is already cancelled",
-}
-
 
 def refund_locked_order(
     session: Session, order: Order, tickets: Sequence[Ticket], reason: str | None
@@ -312,10 +307,9 @@ def refund_order(
     tickets = orders_repository.lock_order_tickets(session, order.id)
     # No time rules for refunds (allowed after the event started), so no clock is read.
 
-    if order.status in _NOT_REFUNDABLE:
-        raise BusinessRuleError(_NOT_REFUNDABLE[order.status])
-    if order.status != OrderStatus.PAID:
-        raise BusinessRuleError("Only paid orders can be refunded")
+    reason = orders_service.refund_block_reason(order)  # shared with the organizer's list
+    if reason is not None:
+        raise BusinessRuleError(reason)
 
     refund = refund_locked_order(session, order, tickets, data.reason)
     payment = refund.payment

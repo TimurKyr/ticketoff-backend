@@ -1,6 +1,7 @@
 import uuid
-from collections.abc import Sequence
-from datetime import UTC, datetime
+from collections.abc import Iterable, Sequence
+from datetime import UTC, datetime, timedelta
+from typing import Literal
 
 from sqlalchemy.orm import Session
 
@@ -19,6 +20,10 @@ from app.modules.orders.qr import issue_ticket_token
 from app.modules.orders.schemas import (
     CheckoutCreate,
     EventInventoryOut,
+    EventOrderGuestOut,
+    EventOrderOut,
+    EventOrderPage,
+    EventOrderTicketOut,
     InventoryTicketTypeOut,
     OrderOut,
     PublicTicketTypeOut,
@@ -556,6 +561,54 @@ _ALREADY_CLOSED = {
 }
 
 
+# --- eligibility rules (BE-30) ---
+# Pure checks shared by the actions (POST cancel / refund) and the organizer's order list,
+# so a can_cancel / can_refund flag and the real request can never disagree. None means
+# allowed; otherwise the 409 message the action answers with.
+
+_NOT_REFUNDABLE = {
+    OrderStatus.REFUNDED: "Order is already refunded",
+    OrderStatus.CANCELLED: "Order is already cancelled",
+}
+
+Canceller = Literal["buyer", "organizer"]
+
+
+def refund_block_reason(order: Order) -> str | None:
+    """Why POST /orders/{id}/refund refuses this order, for the event's organizer.
+
+    No time rule: a paid order can be refunded after the event started, too.
+    """
+    if order.status in _NOT_REFUNDABLE:
+        return _NOT_REFUNDABLE[order.status]
+    if order.status != OrderStatus.PAID:
+        return "Only paid orders can be refunded"
+    return None
+
+
+def cancel_block_reason(
+    order: Order,
+    *,
+    by: Canceller,
+    event_start_at: datetime,
+    ticket_statuses: Iterable[TicketStatus],
+    now: datetime,
+) -> str | None:
+    """Why POST /orders/{id}/cancel refuses this order for `by` (the buyer or the event's
+    owner) at `now`. `ticket_statuses`: every ticket of the order."""
+    if order.status in _ALREADY_CLOSED:
+        return _ALREADY_CLOSED[order.status]
+    if order.status == OrderStatus.PAID:
+        return "Paid orders are refunded by the organizer"
+    if order.status == OrderStatus.PENDING and by != "buyer":
+        return "Only the buyer can cancel a pending checkout"
+    if now >= event_start_at:
+        return "Event has already started"
+    if any(status == TicketStatus.CHECKED_IN for status in ticket_statuses):
+        return "A ticket of this order was already used"
+    return None
+
+
 def cancel_locked_order(order: Order, tickets: Sequence[Ticket]) -> None:
     """The order and every given ticket become cancelled. Nothing else.
 
@@ -568,7 +621,7 @@ def cancel_locked_order(order: Order, tickets: Sequence[Ticket]) -> None:
         ticket.status = TicketStatus.CANCELLED
 
 
-def _canceller(order: Order, user: User) -> str | None:
+def _canceller(order: Order, user: User) -> Canceller | None:
     """'buyer', 'organizer' (owner of the order's event), or None for anyone else.
 
     Buyer and event owner never change, so the unlocked read is enough to decide this.
@@ -602,16 +655,15 @@ def cancel_order(
     tickets = repository.lock_order_tickets(session, order.id)
     now = now or datetime.now(UTC)  # after the locks, like pay
 
-    if order.status in _ALREADY_CLOSED:
-        raise BusinessRuleError(_ALREADY_CLOSED[order.status])
-    if order.status == OrderStatus.PAID:
-        raise BusinessRuleError("Paid orders are refunded by the organizer")
-    if order.status == OrderStatus.PENDING and by != "buyer":
-        raise BusinessRuleError("Only the buyer can cancel a pending checkout")
-    if now >= event.start_at:
-        raise BusinessRuleError("Event has already started")
-    if any(ticket.status == TicketStatus.CHECKED_IN for ticket in tickets):
-        raise BusinessRuleError("A ticket of this order was already used")
+    reason = cancel_block_reason(
+        order,
+        by=by,
+        event_start_at=event.start_at,
+        ticket_statuses=[ticket.status for ticket in tickets],
+        now=now,
+    )
+    if reason is not None:
+        raise BusinessRuleError(reason)
 
     cancel_locked_order(order, tickets)  # all valid here: checked_in was refused above
     audit.log(
@@ -625,6 +677,116 @@ def cancel_order(
     )
     session.commit()  # order, tickets and audit row together
     return order_out(repository.get_order_with_details(session, order.id, reload=True))
+
+
+# --- the organizer's list of an event's orders (BE-30) ---
+
+
+def _event_order_out(
+    order: Order,
+    *,
+    viewer: User,
+    event: Event,
+    promo_code: str | None,
+    check_ins: dict[uuid.UUID, datetime],
+    hold: timedelta,
+    now: datetime,
+) -> EventOrderOut:
+    """Built only from what list_event_orders loaded: nothing is lazy-loaded here."""
+    tickets_by_attendee = {
+        ticket.attendee_id: ticket for item in order.items for ticket in item.tickets
+    }
+    items = {item.id: item for item in order.items}
+    guests = []
+    for attendee in order.attendees:
+        ticket = tickets_by_attendee.get(attendee.id)
+        # Attendees made before BE-14 have no item link; their ticket has one.
+        item = items.get(attendee.order_item_id) or (
+            items.get(ticket.order_item_id) if ticket is not None else None
+        )
+        guests.append(
+            EventOrderGuestOut(
+                id=attendee.id,
+                name=attendee.name,
+                email=attendee.email,
+                ticket_type_id=item.ticket_type_id if item is not None else None,
+                ticket_type_name=item.ticket_type.name if item is not None else None,
+                ticket=None
+                if ticket is None
+                else EventOrderTicketOut(
+                    id=ticket.id, status=ticket.status, checked_in_at=check_ins.get(ticket.id)
+                ),
+            )
+        )
+    guests.sort(key=lambda g: (g.ticket_type_name or "", g.name.casefold(), g.id))
+
+    # The organizer can also be the buyer of an order of their own event; the cancel rules
+    # then treat them as the buyer, exactly like POST /orders/{id}/cancel does.
+    by: Canceller = "buyer" if order.buyer_user_id == viewer.id else "organizer"
+    ticket_statuses = [ticket.status for item in order.items for ticket in item.tickets]
+    return EventOrderOut(
+        id=order.id,
+        status=order.status,
+        buyer_email=order.buyer.email,
+        total_kzt=order.total_kzt,
+        discount_kzt=order.discount_kzt,
+        promo_code=promo_code,
+        created_at=order.created_at,
+        # The same boundary as repository.reserving_orders_clause and pay_order's check.
+        hold_expired=order.status == OrderStatus.PENDING and now >= order.created_at + hold,
+        can_refund=refund_block_reason(order) is None,
+        can_cancel=cancel_block_reason(
+            order,
+            by=by,
+            event_start_at=event.start_at,
+            ticket_statuses=ticket_statuses,
+            now=now,
+        )
+        is None,
+        guests=guests,
+    )
+
+
+def list_event_orders(
+    session: Session,
+    viewer: User,
+    event: Event,
+    *,
+    q: str | None,
+    status: OrderStatus | None,
+    limit: int,
+    offset: int,
+    now: datetime | None = None,
+) -> EventOrderPage:
+    """The event's orders for its organizer (the router has checked ownership), newest first.
+
+    `q` (trimmed; empty means no filter) matches the buyer's email, a guest's name or email,
+    or the order id (see repository.list_event_orders). can_refund / can_cancel come from the
+    same rules as the refund and cancel actions, at one clock reading for the whole page.
+    """
+    now = now or datetime.now(UTC)
+    q = (q or "").strip() or None
+    orders, total = repository.list_event_orders(
+        session, event.id, q=q, status=status, limit=limit, offset=offset
+    )
+    promo_codes = repository.promo_codes_by_order(session, [order.id for order in orders])
+    check_ins = repository.check_ins_by_ticket(
+        session, [t.id for order in orders for item in order.items for t in item.tickets]
+    )
+    hold = repository.checkout_hold()
+    items = [
+        _event_order_out(
+            order,
+            viewer=viewer,
+            event=event,
+            promo_code=promo_codes.get(order.id),
+            check_ins=check_ins,
+            hold=hold,
+            now=now,
+        )
+        for order in orders
+    ]
+    return EventOrderPage(items=items, total=total, limit=limit, offset=offset)
 
 
 # --- buyer reads ---

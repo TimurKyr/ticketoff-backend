@@ -246,3 +246,54 @@ class OrderOut(BaseModel):
     tickets: list[TicketOut]
     # Pending (unpaid) orders only: after this the order no longer holds its tickets.
     expires_at: datetime | None = None
+
+
+# --- the organizer's list of an event's orders (BE-30) ---
+
+
+class EventOrderTicketOut(BaseModel):
+    id: uuid.UUID
+    status: TicketStatus
+    # When the guest was admitted (the active scan), else None. No qr_token: the list must
+    # not hand out entry credentials.
+    checked_in_at: datetime | None
+
+
+class EventOrderGuestOut(BaseModel):
+    """One attendee of the order: the person a ticket is (or will be) issued to."""
+
+    id: uuid.UUID
+    name: str
+    email: str | None
+    ticket_type_id: uuid.UUID | None
+    ticket_type_name: str | None
+    # None until the ticket exists (a paid order issues tickets only on payment).
+    ticket: EventOrderTicketOut | None
+
+
+class EventOrderOut(BaseModel):
+    id: uuid.UUID
+    status: OrderStatus
+    buyer_email: str
+    # Before the discount; the buyer pays total_kzt - discount_kzt.
+    total_kzt: int
+    discount_kzt: int
+    promo_code: str | None
+    created_at: datetime
+    # A pending checkout whose hold ran out: it no longer holds tickets (inventory ignores
+    # it) and can no longer be paid, but keeps the stored status "pending".
+    hold_expired: bool
+    # The same rules as POST /orders/{id}/refund and POST /orders/{id}/cancel, for the
+    # organizer looking at the list, at the time of the request.
+    can_refund: bool
+    can_cancel: bool
+    guests: list[EventOrderGuestOut]
+
+
+class EventOrderPage(BaseModel):
+    """One page of an event's orders, newest first. total counts every matching order."""
+
+    items: list[EventOrderOut]
+    total: int
+    limit: int
+    offset: int
