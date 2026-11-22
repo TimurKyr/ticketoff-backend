@@ -22,6 +22,7 @@ from app.modules.identity.router import organizer_profile_router
 from app.modules.identity.router import router as auth_router
 from app.modules.notifications.router import notifications_router
 from app.modules.orders.router import (
+    event_orders_router,
     orders_router,
     registrations_router,
     ticket_types_router,
@@ -62,6 +63,7 @@ app.include_router(checkin_router)
 app.include_router(ticket_types_router)
 app.include_router(registrations_router)
 app.include_router(orders_router)
+app.include_router(event_orders_router)
 app.include_router(tickets_router)
 app.include_router(activation_router)
 app.include_router(payments_router)

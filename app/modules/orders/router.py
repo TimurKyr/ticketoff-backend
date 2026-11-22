@@ -1,15 +1,18 @@
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Response, status
+from fastapi import APIRouter, Depends, Query, Response, status
 
+from app.common.pagination import Limit, Offset
 from app.modules.events.dependencies import require_event_owner
 from app.modules.events.models import Event
 from app.modules.identity.dependencies import CurrentUser, SessionDep
 from app.modules.orders import service
+from app.modules.orders.enums import OrderStatus
 from app.modules.orders.schemas import (
     CheckoutCreate,
     EventInventoryOut,
+    EventOrderPage,
     OrderOut,
     PublicTicketTypeOut,
     RegistrationCreate,
@@ -22,6 +25,7 @@ from app.modules.orders.schemas import (
 ticket_types_router = APIRouter(prefix="/events", tags=["ticket types"])
 registrations_router = APIRouter(prefix="/events", tags=["registrations"])
 orders_router = APIRouter(prefix="/orders", tags=["orders"])
+event_orders_router = APIRouter(prefix="/events", tags=["orders"])
 tickets_router = APIRouter(prefix="/tickets", tags=["tickets"])
 
 # The path's event, if the logged-in organizer owns it; otherwise 404 (403 if not an organizer).
@@ -86,6 +90,38 @@ def update_ticket_type(
 ) -> TicketTypeOut:
     return service.update_ticket_type(
         session, event.organizer_id, event.id, ticket_type_id, payload, actor_user_id=user.id
+    )
+
+
+# --- the organizer's orders and guests (BE-30) ---
+
+
+@event_orders_router.get(
+    "/{event_id}/orders",
+    response_model=EventOrderPage,
+    summary="Orders and guests of my event, newest first",
+)
+def list_event_orders(
+    event: OwnedEventDep,
+    user: CurrentUser,
+    session: SessionDep,
+    q: Annotated[
+        str | None,
+        Query(
+            max_length=100,
+            description="Part of the buyer's email or a guest's name or email (any case), "
+            "a full order id, or the start of one (4+ hex digits)",
+        ),
+    ] = None,
+    order_status: Annotated[OrderStatus | None, Query(alias="status")] = None,
+    limit: Limit = 20,
+    offset: Offset = 0,
+) -> EventOrderPage:
+    """can_refund / can_cancel follow the same rules as POST /orders/{id}/refund and
+    POST /orders/{id}/cancel. A pending order keeps its status after its hold ran out;
+    hold_expired tells it apart."""
+    return service.list_event_orders(
+        session, user, event, q=q, status=order_status, limit=limit, offset=offset
     )
 
 

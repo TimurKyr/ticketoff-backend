@@ -1,15 +1,19 @@
+import re
 import uuid
 from collections.abc import Iterable
 from datetime import datetime, timedelta
 
-from sqlalchemy import ColumnElement, and_, func, or_, select
+from sqlalchemy import ColumnElement, String, and_, cast, func, or_, select
 from sqlalchemy.engine import Row as ResultRow
 from sqlalchemy.orm import Session, contains_eager, joinedload, selectinload
 
 from app.core.config import get_settings
 from app.modules.events.models import Event, Row, Seat
+from app.modules.identity.models import User
+from app.modules.ops.models import CheckInRecord
 from app.modules.orders.enums import OrderStatus, TicketStatus
-from app.modules.orders.models import Order, OrderItem, Ticket, TicketType
+from app.modules.orders.models import Attendee, Order, OrderItem, Ticket, TicketType
+from app.modules.promotions.models import PromoCode, PromoRedemption
 
 
 def get_event(session: Session, event_id: uuid.UUID) -> Event | None:
@@ -366,3 +370,110 @@ def lock_event_tickets(session: Session, event_id: uuid.UUID) -> list[Ticket]:
         .execution_options(populate_existing=True)
     )
     return list(session.scalars(stmt).unique())
+
+
+# --- the organizer's list of an event's orders (BE-30) ---
+
+# A short order number as the web shows it (the first hex digits of the id), or a longer
+# piece of the id with its dashes.
+_ORDER_ID_PREFIX = re.compile(r"[0-9a-f][0-9a-f-]{3,35}")
+
+
+def _order_search(q: str) -> ColumnElement[bool]:
+    """Orders where `q` is part of the buyer's email or of a guest's name or email (any case;
+    % and _ are literal), or the order id (a full id, or the start of one).
+
+    EXISTS, not joins: an order with several matching guests is still one row.
+    """
+    buyer_matches = (
+        select(User.id)
+        .where(User.id == Order.buyer_user_id, User.email.icontains(q, autoescape=True))
+        .exists()
+    )
+    guest_matches = (
+        select(Attendee.id)
+        .where(
+            Attendee.order_id == Order.id,
+            or_(
+                Attendee.name.icontains(q, autoescape=True),
+                Attendee.email.icontains(q, autoescape=True),
+            ),
+        )
+        .exists()
+    )
+    matches: list[ColumnElement[bool]] = [buyer_matches, guest_matches]
+    try:
+        matches.append(Order.id == uuid.UUID(q))
+    except ValueError:
+        prefix = q.lower()
+        if _ORDER_ID_PREFIX.fullmatch(prefix):
+            # uuid::text is lower-case with dashes, e.g. "16b0b9b4-0b4c-...".
+            matches.append(cast(Order.id, String).startswith(prefix, autoescape=True))
+    return or_(*matches)
+
+
+def list_event_orders(
+    session: Session,
+    event_id: uuid.UUID,
+    *,
+    q: str | None,
+    status: OrderStatus | None,
+    limit: int,
+    offset: int,
+) -> tuple[list[Order], int]:
+    """One page of the event's orders, newest first, and the number of all matching orders.
+
+    Loaded with everything the list shows, in a fixed number of queries whatever the page
+    size: the buyer (joined), the attendees, the items with their ticket types, and the
+    tickets. Promo codes and check-ins come from promo_codes_by_order / check_ins_by_ticket.
+    """
+    conditions: list[ColumnElement[bool]] = [Order.event_id == event_id]
+    if status is not None:
+        conditions.append(Order.status == status)
+    if q:
+        conditions.append(_order_search(q))
+
+    total = session.scalar(select(func.count()).select_from(Order).where(*conditions)) or 0
+    stmt = (
+        select(Order)
+        .where(*conditions)
+        .options(
+            joinedload(Order.buyer),
+            selectinload(Order.attendees),
+            selectinload(Order.items).options(
+                joinedload(OrderItem.ticket_type), selectinload(OrderItem.tickets)
+            ),
+        )
+        # Newest first; id breaks ties (orders created in one transaction share now()).
+        .order_by(Order.created_at.desc(), Order.id.desc())
+        .limit(limit)
+        .offset(offset)
+    )
+    return list(session.scalars(stmt)), total
+
+
+def promo_codes_by_order(session: Session, order_ids: Iterable[uuid.UUID]) -> dict[uuid.UUID, str]:
+    """The promo code used by each of these orders (orders without one are missing)."""
+    ids = list(order_ids)
+    if not ids:
+        return {}
+    stmt = (
+        select(PromoRedemption.order_id, PromoCode.code)
+        .join(PromoCode, PromoCode.id == PromoRedemption.promo_code_id)
+        .where(PromoRedemption.order_id.in_(ids))
+    )
+    return {order_id: code for order_id, code in session.execute(stmt)}
+
+
+def check_ins_by_ticket(
+    session: Session, ticket_ids: Iterable[uuid.UUID]
+) -> dict[uuid.UUID, datetime]:
+    """When each of these tickets was admitted: its active (not reversed) scan, at most one
+    per ticket (uq_check_in_records_active_ticket). Tickets never admitted are missing."""
+    ids = list(ticket_ids)
+    if not ids:
+        return {}
+    stmt = select(CheckInRecord.ticket_id, CheckInRecord.checked_in_at).where(
+        CheckInRecord.ticket_id.in_(ids), CheckInRecord.is_reversed.is_(False)
+    )
+    return {ticket_id: at for ticket_id, at in session.execute(stmt)}
