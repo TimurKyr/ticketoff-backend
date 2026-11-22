@@ -21,6 +21,13 @@ def list_venues(session: Session) -> list[Venue]:
     return list(session.scalars(select(Venue).order_by(Venue.name)))
 
 
+def load_venues(session: Session, venue_ids: Iterable[uuid.UUID]) -> list[Venue]:
+    ids = list(venue_ids)
+    if not ids:
+        return []
+    return list(session.scalars(select(Venue).where(Venue.id.in_(ids))))
+
+
 def get_venue(session: Session, venue_id: uuid.UUID) -> Venue | None:
     return session.get(Venue, venue_id)
 

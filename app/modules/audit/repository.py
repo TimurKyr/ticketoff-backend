@@ -13,6 +13,16 @@ def add(session: Session, entry: AuditLog) -> None:
     session.flush()
 
 
+def has_action(session: Session, event_id: uuid.UUID, action_type: str) -> bool:
+    """Whether the event's log has at least one row of this exact action type."""
+    stmt = (
+        select(AuditLog.id)
+        .where(AuditLog.event_id == event_id, AuditLog.action_type == action_type)
+        .limit(1)
+    )
+    return session.scalar(stmt) is not None
+
+
 def _timeline_filters(
     event_id: uuid.UUID,
     from_date: datetime | None,

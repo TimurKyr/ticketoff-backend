@@ -23,3 +23,4 @@ There are too many tickets to attach. All your tickets: {{ tickets_url }}
 Your tickets are attached (PDF with a QR code). Show the QR code at the entrance.
 {% endif %}
 Order: {{ order_url }}
+Add to calendar (.ics): {{ calendar_url }}

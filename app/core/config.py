@@ -24,6 +24,9 @@ class Settings(BaseSettings):
     # Public address of the web app. A campaign QR encodes a link on it, so a phone camera
     # opens the event page with the promo code (BE-16).
     frontend_url: str = "https://ticketoff.store"
+    # Public address of this API. Links that must reach the API itself, not the web app
+    # (the .ics calendar file, BE-31), are built on it.
+    public_api_url: str = "https://api.ticketoff.store"
     # Simulated payments (BE-14). The fee must be positive: ck_payments_amount_positive.
     activation_fee_kzt: int = Field(default=5000, ge=1)
     processing_fee_percent: int = Field(default=3, ge=0, le=100)

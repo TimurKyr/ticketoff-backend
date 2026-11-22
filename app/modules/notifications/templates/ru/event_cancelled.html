@@ -12,4 +12,5 @@
       <a href="{{ url }}">Открыть заказ{% if order_urls | length > 1 %} {{ loop.index }}{% endif %}</a><br>
 {% endfor %}
     </p>
+    <p>Если вы добавляли событие в календарь, откройте <a href="{{ calendar_url }}">этот файл (.ics)</a>: календарь отметит его отменённым.</p>
 {% endblock %}

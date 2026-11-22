@@ -1,13 +1,13 @@
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, Query, Response, status
 from pydantic import AwareDatetime
 from sqlalchemy.orm import Session
 
 from app.common.pagination import Limit, Offset
 from app.core.db import get_session
-from app.modules.events import service
+from app.modules.events import calendar, service
 from app.modules.events.dependencies import require_event_owner
 from app.modules.events.models import Event
 from app.modules.events.schemas import (
@@ -82,6 +82,30 @@ def list_public_events(
 @events_router.get("/{event_id}", response_model=EventOut, summary="Public event page")
 def get_event(event_id: uuid.UUID, session: SessionDep) -> Event:
     return _out(session, service.get_public_event(session, event_id))
+
+
+@events_router.get(
+    "/{event_id}/calendar.ics",
+    response_class=Response,
+    responses={
+        200: {"content": {"text/calendar": {"schema": {"type": "string"}}}},
+        404: {"description": "No such event, or a draft or private one"},
+    },
+    summary="The event as an iCalendar (.ics) file",
+)
+def get_event_calendar(event_id: uuid.UUID, session: SessionDep) -> Response:
+    """No login. Visible like GET /events/{id}, and also cancelled or completed events that
+    were published: a cancelled one has STATUS:CANCELLED and the same UID, so a calendar
+    that imports it again drops the entry."""
+    event = service.get_calendar_event(session, event_id)
+    return Response(
+        content=calendar.ics(event),
+        media_type="text/calendar; charset=utf-8",
+        headers={
+            "Content-Disposition": f'attachment; filename="ticketoff-{event.id}.ics"',
+            "Cache-Control": "no-cache",
+        },
+    )
 
 
 @events_router.patch("/{event_id}", response_model=EventOut, summary="Edit an event")
