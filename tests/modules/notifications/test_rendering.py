@@ -11,7 +11,7 @@ def reply(**overrides: str) -> dict:
     return {
         "case_subject": "Джаз",
         "message_excerpt": "Билет отправлен.",
-        "case_url": "https://ticketoff.store/account",
+        "case_url": "https://ticketoff.store/support/cases/7d0c8a4e-1b2f-4c3d-9e8f-0a1b2c3d4e5f",
         **overrides,
     }
 

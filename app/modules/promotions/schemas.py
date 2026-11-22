@@ -4,6 +4,7 @@ from typing import Literal, Self
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
 
+from app.modules.orders.schemas import PRICE_KZT_MAX, QUANTITY_MAX
 from app.modules.promotions.enums import DiscountType, PromoCodeStatus
 
 # A custom code: letters, digits, "_" and "-". Stored upper-case, so "spring20" is "SPRING20".
@@ -13,10 +14,11 @@ CODE_PATTERN = r"^[A-Za-z0-9_-]{3,32}$"
 class CampaignCreate(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     discount_type: DiscountType
-    # Percent (1-100) or a fixed amount in KZT, depending on discount_type.
-    discount_value: int = Field(ge=1)
+    # Percent (1-100) or a fixed amount in KZT, depending on discount_type. Both columns are
+    # 32-bit: the caps (the same as for ticket types) make a huge value a 422, not a 500.
+    discount_value: int = Field(ge=1, le=PRICE_KZT_MAX)
     # None means unlimited.
-    max_redemptions: int | None = Field(default=None, ge=1)
+    max_redemptions: int | None = Field(default=None, ge=1, le=QUANTITY_MAX)
     # Aware only: comparing naive and aware datetimes raises TypeError.
     starts_at: AwareDatetime | None = None
     ends_at: AwareDatetime | None = None

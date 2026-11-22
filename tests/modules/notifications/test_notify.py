@@ -212,7 +212,8 @@ def test_links_follow_frontend_url(monkeypatch: pytest.MonkeyPatch) -> None:
 
     assert links.order_url(order_id) == f"https://staging.ticketoff.store/orders/{order_id}"
     assert links.tickets_url() == "https://staging.ticketoff.store/tickets"
-    assert links.support_url() == "https://staging.ticketoff.store/account"
+    case_id = uuid.uuid4()
+    assert links.support_url(case_id) == f"https://staging.ticketoff.store/support/cases/{case_id}"
 
 
 # --- support (BE-17) ---
@@ -232,7 +233,8 @@ def test_notify_support_reply(db_session: Session, emails: RecordingEmailProvide
     assert row.type == NotificationType.SUPPORT_REPLY and row.payload == {"case_id": str(case_id)}
     [email] = emails.sent
     assert email.subject == "Ответ поддержки: Не пришёл билет"
-    assert "Открыть обращение: https://ticketoff.store/account" in email.text
+    assert f"Открыть обращение: https://ticketoff.store/support/cases/{case_id}" in email.text
+    assert f'href="https://ticketoff.store/support/cases/{case_id}"' in email.html
     excerpt = email.text.split("\n\n")[1]
     assert excerpt.startswith("Здравствуйте! Мы отправили") and excerpt.endswith("…")
     assert len(excerpt) <= notifications.SUPPORT_EXCERPT_CHARS
@@ -240,14 +242,18 @@ def test_notify_support_reply(db_session: Session, emails: RecordingEmailProvide
 
 def test_notify_support_status(db_session: Session, emails: RecordingEmailProvider) -> None:
     user = user_speaking(db_session, Language.EN)
+    case_id = uuid.uuid4()
 
     notifications.notify_support(
-        db_session, user, case_id=uuid.uuid4(), case_subject="Refund", status=SupportStatus.RESOLVED
+        db_session, user, case_id=case_id, case_subject="Refund", status=SupportStatus.RESOLVED
     )
     db_session.commit()
 
-    assert rows(db_session, user)[0].type == NotificationType.SUPPORT_STATUS
-    assert 'The status of your request "Refund" changed: resolved.' in emails.sent[0].text
+    [row] = rows(db_session, user)
+    assert row.type == NotificationType.SUPPORT_STATUS and row.payload == {"case_id": str(case_id)}
+    [email] = emails.sent
+    assert 'The status of your request "Refund" changed: resolved.' in email.text
+    assert f"Open the request: https://ticketoff.store/support/cases/{case_id}" in email.text
 
 
 @pytest.mark.parametrize("kwargs", [{}, {"message": "hi", "status": SupportStatus.OPEN}])

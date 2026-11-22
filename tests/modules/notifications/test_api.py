@@ -249,7 +249,7 @@ def test_rows_written_by_a_flow_show_up(db_session: Session, api: TestClient, me
     context = {
         "case_subject": "Не пришёл билет",
         "message_excerpt": "Ответ",
-        "case_url": "https://ticketoff.store/account",
+        "case_url": "https://ticketoff.store/support/cases/7d0c8a4e-1b2f-4c3d-9e8f-0a1b2c3d4e5f",
     }
     notifications.notify(
         db_session, me, NotificationType.SUPPORT_REPLY, context, payload={"case_id": "1"}
