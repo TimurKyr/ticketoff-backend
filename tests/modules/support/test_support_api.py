@@ -540,6 +540,33 @@ def test_a_handler_reply_notifies_the_customer_once(
     assert len(emails.to(organizer.user.email)) == organizer_mails
 
 
+def test_support_emails_and_notifications_point_to_the_case(
+    api: TestClient,
+    db_session: Session,
+    buyer: Account,
+    organizer: Account,
+    event: Event,
+    emails: RecordingEmailProvider,
+) -> None:
+    case = attendee_case(api, buyer, event)
+    case_url = f"https://ticketoff.store/support/cases/{case['id']}"
+
+    api.post(f"/support/cases/{case['id']}/assign", headers=organizer.headers)  # status email
+    say(api, organizer, case["id"], "Parking is free")  # reply email
+
+    [status_mail, reply_mail] = emails.to(buyer.user.email)[-2:]
+    for mail in (status_mail, reply_mail):
+        assert case_url in mail.text
+        assert f'href="{case_url}"' in mail.html
+    # The in-app rows carry the case id; the web app builds the same /support/cases/<id> link.
+    rows = db_session.scalars(
+        select(Notification).where(Notification.user_id == buyer.user.id)
+    ).all()
+    support_rows = [r for r in rows if r.type.value.startswith("support_")]
+    assert sorted(r.type.value for r in support_rows) == ["support_reply", "support_status"]
+    assert all(r.payload == {"case_id": case["id"]} for r in support_rows)
+
+
 def test_a_customer_message_notifies_nobody(
     api: TestClient,
     db_session: Session,

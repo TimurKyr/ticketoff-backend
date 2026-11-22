@@ -13,8 +13,8 @@ from app.core.config import get_settings
 ORDER_PATH = "/orders/{order_id}"
 # All of the buyer's tickets: the order email links here when there are too many to attach.
 TICKETS_PATH = "/tickets"
-# Support emails. The web app has no support page yet; switch to the case page when it does.
-SUPPORT_PATH = "/account"
+# Support emails: the case thread (ticketoff-web FE-8).
+SUPPORT_CASE_PATH = "/support/cases/{case_id}"
 # Email verification: the web app reads ?token= and calls POST /auth/verify-email.
 VERIFY_EMAIL_PATH = "/verify-email"
 
@@ -31,8 +31,8 @@ def tickets_url() -> str:
     return web_url(TICKETS_PATH)
 
 
-def support_url() -> str:
-    return web_url(SUPPORT_PATH)
+def support_url(case_id: uuid.UUID) -> str:
+    return web_url(SUPPORT_CASE_PATH.format(case_id=case_id))
 
 
 def verify_email_url(token: str) -> str:

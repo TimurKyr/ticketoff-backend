@@ -84,12 +84,12 @@ CONTEXTS: dict[NotificationType, dict] = {
     NotificationType.SUPPORT_REPLY: {
         "case_subject": "Не пришёл билет",
         "message_excerpt": "Мы отправили билет повторно.",
-        "case_url": "https://ticketoff.store/account",
+        "case_url": "https://ticketoff.store/support/cases/7d0c8a4e-1b2f-4c3d-9e8f-0a1b2c3d4e5f",
     },
     NotificationType.SUPPORT_STATUS: {
         "case_subject": "Не пришёл билет",
         "status": SupportStatus.WAITING_CUSTOMER.value,
-        "case_url": "https://ticketoff.store/account",
+        "case_url": "https://ticketoff.store/support/cases/7d0c8a4e-1b2f-4c3d-9e8f-0a1b2c3d4e5f",
     },
 }
 
@@ -167,7 +167,10 @@ EXPECTED: dict[tuple[NotificationType, str], tuple[str, tuple[str, ...]]] = {
     ),
     (NotificationType.SUPPORT_REPLY, "ru"): (
         "Ответ поддержки: Не пришёл билет",
-        ("Мы отправили билет повторно.", "Открыть обращение: https://ticketoff.store/account"),
+        (
+            "Мы отправили билет повторно.",
+            "Открыть обращение: https://ticketoff.store/support/cases/7d0c8a4e-1b2f-4c3d-9e8f-0a1b2c3d4e5f",
+        ),
     ),
     (NotificationType.SUPPORT_REPLY, "en"): (
         "Support replied: Не пришёл билет",

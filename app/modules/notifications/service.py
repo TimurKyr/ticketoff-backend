@@ -202,7 +202,7 @@ def notify_support(
     """
     if (message is None) == (status is None):
         raise ValueError("notify_support needs exactly one of message or status")
-    context: dict = {"case_subject": case_subject, "case_url": links.support_url()}
+    context: dict = {"case_subject": case_subject, "case_url": links.support_url(case_id)}
     if message is not None:
         type_ = NotificationType.SUPPORT_REPLY
         context["message_excerpt"] = _excerpt(message)

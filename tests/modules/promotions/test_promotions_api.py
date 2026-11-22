@@ -18,7 +18,8 @@ from app.modules.events.models import Event
 from app.modules.identity.models import OrganizerProfile
 from app.modules.orders.enums import OrderStatus
 from app.modules.orders.models import Order, TicketType
-from app.modules.promotions.models import PromoCode, PromoRedemption
+from app.modules.orders.schemas import PRICE_KZT_MAX, QUANTITY_MAX
+from app.modules.promotions.models import PromoCode, PromoRedemption, PromotionalCampaign
 from tests.factories import create_event, create_ticket_type
 from tests.markers import postgres_only
 from tests.qr import decode_qr_png
@@ -156,6 +157,54 @@ def test_invalid_campaign_is_422(
     )
 
     assert response.status_code == 422
+
+
+# The columns are 32-bit: 2**31 used to reach the database and fail there with a 500.
+INT32_OVERFLOW = 2**31
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"discount_type": "fixed", "discount_value": PRICE_KZT_MAX + 1},
+        {"discount_type": "fixed", "discount_value": INT32_OVERFLOW},
+        {"discount_type": "percent", "discount_value": INT32_OVERFLOW},
+        {"discount_type": "percent", "discount_value": 10, "max_redemptions": QUANTITY_MAX + 1},
+        {"discount_type": "percent", "discount_value": 10, "max_redemptions": INT32_OVERFLOW},
+    ],
+)
+def test_too_large_campaign_values_are_422_and_never_stored(
+    api: TestClient, db_session: Session, owner: Organizer, event: Event, body: dict
+) -> None:
+    response = api.post(
+        f"/events/{event.id}/campaigns", json={"name": "Huge"} | body, headers=owner.headers
+    )
+
+    assert response.status_code == 422
+    stored = db_session.scalar(
+        select(func.count())
+        .select_from(PromotionalCampaign)
+        .where(PromotionalCampaign.event_id == event.id)
+    )
+    assert stored == 0
+
+
+def test_campaign_values_at_the_caps_are_accepted(
+    api: TestClient, owner: Organizer, event: Event
+) -> None:
+    campaign = new_campaign(
+        api,
+        owner,
+        event,
+        discount_type="fixed",
+        discount_value=PRICE_KZT_MAX,
+        max_redemptions=QUANTITY_MAX,
+    )
+
+    assert (campaign["discount_value"], campaign["max_redemptions"]) == (
+        PRICE_KZT_MAX,
+        QUANTITY_MAX,
+    )
 
 
 def test_other_organizer_gets_404(
