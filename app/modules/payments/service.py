@@ -426,10 +426,15 @@ def _percent_half_up(amount: int, percent: int) -> int:
     return (amount * percent + 50) // 100
 
 
+def fee_for(gross: int, percent: int) -> int:
+    """The simulated processing fee on `gross`, one rule for the summary and the analytics."""
+    return _percent_half_up(gross, percent)
+
+
 def get_summary(session: Session, event: Event) -> PaymentSummaryOut:
     gross, refunds = repository.summary_totals(session, event.id)
     percent = get_settings().processing_fee_percent
-    fees = _percent_half_up(gross, percent)
+    fees = fee_for(gross, percent)
     return PaymentSummaryOut(
         gross_kzt=gross,
         fees_kzt=fees,
