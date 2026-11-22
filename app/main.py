@@ -15,6 +15,7 @@ from app.core.db import engine, get_session
 from app.core.error_handlers import add_error_handlers
 from app.core.logging import configure_logging
 from app.modules.admin.router import admin_router
+from app.modules.analytics.router import router as analytics_router
 from app.modules.audit.router import timeline_router
 from app.modules.checkin.router import checkin_router, staff_router
 from app.modules.events.router import events_router, organizer_router, venues_router
@@ -70,6 +71,7 @@ app.include_router(campaigns_router)
 app.include_router(promo_router)
 app.include_router(admin_router)
 app.include_router(notifications_router)
+app.include_router(analytics_router)
 app.include_router(support_router)
 
 
