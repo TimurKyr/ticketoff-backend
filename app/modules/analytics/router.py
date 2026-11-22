@@ -26,6 +26,7 @@ def overview(organizer: OrganizerDep, session: SessionDep) -> OverviewOut:
     "/events",
     response_model=EventHistoryPage,
     summary="Event history: my events, newest first, with their numbers",
+    description="The per-event action log (audit) is GET /events/{event_id}/timeline.",
 )
 def event_history(
     organizer: OrganizerDep,
@@ -40,7 +41,7 @@ def event_history(
 @router.get(
     "/events/{event_id}",
     response_model=EventAnalyticsOut,
-    summary="One of my events: numbers, ticket types and sales per day",
+    summary="One of my events: numbers, ticket types, promo campaigns and sales per day",
 )
 def event_analytics(event: OwnedEventDep, session: SessionDep) -> EventAnalyticsOut:
     return service.get_event_analytics(session, event)

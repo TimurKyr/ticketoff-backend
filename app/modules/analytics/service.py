@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 from app.core.config import get_settings
 from app.modules.analytics import repository
 from app.modules.analytics.schemas import (
+    CampaignStatsOut,
     DailySalesOut,
     EventAnalyticsOut,
     EventCounts,
@@ -34,7 +35,14 @@ def _now() -> datetime:
 
 
 def _figures(
-    *, orders: int, tickets: int, checked_in: int, gross: int, fees: int, refunds: int
+    *,
+    orders: int,
+    tickets: int,
+    checked_in: int,
+    gross: int,
+    discounts: int,
+    fees: int,
+    refunds: int,
 ) -> SalesFigures:
     percent = round(100 * checked_in / tickets, 1) if tickets else 0.0
     return SalesFigures(
@@ -43,6 +51,7 @@ def _figures(
         checked_in=checked_in,
         check_in_percent=percent,
         gross_kzt=gross,
+        discounts_kzt=discounts,
         fees_kzt=fees,
         refunds_kzt=refunds,
         estimated_payout_kzt=gross - fees - refunds,
@@ -50,13 +59,15 @@ def _figures(
 
 
 def _event_stats(session: Session, events: Iterable[Event]) -> list[EventStatsOut]:
-    """One row per event, from four grouped queries for all of them (no query per event)."""
+    """One row per event, from a few grouped queries for all of them (no query per event)."""
     events = list(events)
     ids = [event.id for event in events]
     sold = repository.orders_and_tickets(session, ids)
     gross = repository.gross_kzt(session, ids)
     refunds = repository.refunds_kzt(session, ids)
     scanned = repository.checked_in(session, ids)
+    discounts = repository.discounts_kzt(session, ids)
+    inventory = repository.tickets_available_in_total(session, ids)
     percent = get_settings().processing_fee_percent
     rows = []
     for event in events:
@@ -67,9 +78,11 @@ def _event_stats(session: Session, events: Iterable[Event]) -> list[EventStatsOu
             tickets=tickets,
             checked_in=scanned.get(event.id, 0),
             gross=event_gross,
+            discounts=discounts.get(event.id, 0),
             fees=fee_for(event_gross, percent),
             refunds=refunds.get(event.id, 0),
         )
+        total = inventory.get(event.id, 0)
         rows.append(
             EventStatsOut(
                 event_id=event.id,
@@ -78,6 +91,9 @@ def _event_stats(session: Session, events: Iterable[Event]) -> list[EventStatsOu
                 start_at=event.start_at,
                 end_at=event.end_at,
                 capacity=event.capacity,
+                tickets_total=total,
+                remaining=max(0, total - tickets),
+                percent_sold=round(100 * tickets / total, 1) if total else 0.0,
                 **figures.model_dump(),
             )
         )
@@ -90,6 +106,7 @@ def _sum(rows: list[EventStatsOut]) -> SalesFigures:
         tickets=sum(r.tickets_sold for r in rows),
         checked_in=sum(r.checked_in for r in rows),
         gross=sum(r.gross_kzt for r in rows),
+        discounts=sum(r.discounts_kzt for r in rows),
         fees=sum(r.fees_kzt for r in rows),
         refunds=sum(r.refunds_kzt for r in rows),
     )
@@ -110,7 +127,9 @@ def get_overview(session: Session, organizer: OrganizerProfile) -> OverviewOut:
             session, organizer_id=organizer.id, bucket=bucket, now=_now(), limit=1, offset=0
         )
     return OverviewOut(
-        events=EventCounts(total=len(events), **counts),
+        events=EventCounts(
+            total=len(events), draft=repository.draft_count(session, organizer.id), **counts
+        ),
         totals=_sum(_event_stats(session, events)),
         fee_percent=get_settings().processing_fee_percent,
     )
@@ -154,9 +173,24 @@ def get_event_analytics(session: Session, event: Event) -> EventAnalyticsOut:
             )
             for tt, sold, sales in repository.ticket_type_rows(session, event.id)
         ],
+        campaigns=[
+            CampaignStatsOut(
+                campaign_id=row.campaign.id,
+                name=row.campaign.name,
+                discount_type=row.campaign.discount_type,
+                discount_value=row.campaign.discount_value,
+                redemptions=row.redemptions,
+                orders=row.orders,
+                tickets_sold=row.tickets,
+                gross_kzt=row.gross_kzt,
+                discount_total_kzt=row.discount_kzt,
+                net_kzt=row.gross_kzt - row.refunds_kzt,
+            )
+            for row in repository.campaign_rows(session, event.id)
+        ],
         daily_sales=[
-            DailySalesOut(day=day, orders=orders, tickets_sold=tickets)
-            for day, orders, tickets in repository.daily_sales(session, event.id)
+            DailySalesOut(day=day, orders=orders, tickets_sold=tickets, sales_kzt=sales)
+            for day, orders, tickets, sales in repository.daily_sales(session, event.id)
         ],
         timezone=_venue_timezone(session, event),
         fee_percent=get_settings().processing_fee_percent,
