@@ -5,7 +5,12 @@ from fastapi import APIRouter, Depends, Response, status
 
 from app.modules.events.dependencies import require_event_owner
 from app.modules.events.models import Event
-from app.modules.identity.dependencies import CurrentUser, SessionDep
+from app.modules.identity.dependencies import (
+    EMAIL_NOT_VERIFIED_DOC,
+    CurrentUser,
+    SessionDep,
+    VerifiedUser,
+)
 from app.modules.orders import service
 from app.modules.orders.schemas import (
     CheckoutCreate,
@@ -97,9 +102,10 @@ def update_ticket_type(
     response_model=OrderOut,
     status_code=status.HTTP_201_CREATED,
     summary="Register for free tickets",
+    responses={403: {"description": EMAIL_NOT_VERIFIED_DOC}},
 )
 def register_free(
-    event_id: uuid.UUID, payload: RegistrationCreate, user: CurrentUser, session: SessionDep
+    event_id: uuid.UUID, payload: RegistrationCreate, user: VerifiedUser, session: SessionDep
 ) -> OrderOut:
     return service.register_free(session, user, event_id, payload)
 
@@ -109,9 +115,10 @@ def register_free(
     response_model=OrderOut,
     status_code=status.HTTP_201_CREATED,
     summary="Start a checkout for paid tickets (simulated payment follows)",
+    responses={403: {"description": EMAIL_NOT_VERIFIED_DOC}},
 )
 def checkout(
-    event_id: uuid.UUID, payload: CheckoutCreate, user: CurrentUser, session: SessionDep
+    event_id: uuid.UUID, payload: CheckoutCreate, user: VerifiedUser, session: SessionDep
 ) -> OrderOut:
     return service.checkout(session, user, event_id, payload)
 

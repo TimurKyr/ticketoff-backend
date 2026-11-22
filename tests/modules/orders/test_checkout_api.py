@@ -12,6 +12,7 @@ from app.core.db import get_session
 from app.main import app
 from app.modules.events.models import Event
 from app.modules.orders.models import TicketType
+from tests.emails import confirm_email
 from tests.factories import (
     create_event,
     create_free_ticket_type,
@@ -36,6 +37,7 @@ def login(api: TestClient) -> Callable[[], Headers]:
     def make() -> Headers:
         email, password = f"user-{uuid.uuid4().hex[:12]}@example.com", "correct-horse-battery"
         api.post("/auth/register", json={"email": email, "password": password})
+        confirm_email(api, email)
         token = api.post("/auth/login", data={"username": email, "password": password}).json()[
             "access_token"
         ]

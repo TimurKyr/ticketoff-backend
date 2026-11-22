@@ -50,6 +50,7 @@ def make_user(db_session: Session) -> Callable[..., User]:
             email=email or f"user-{uuid.uuid4().hex[:12]}@example.com",
             password_hash=hash_password(PASSWORD),
             system_role=role,
+            email_verified=True,
         )
         db_session.add(user)
         db_session.flush()

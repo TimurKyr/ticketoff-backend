@@ -12,8 +12,12 @@ from app.modules.orders.enums import OrderStatus, TicketKind
 from app.modules.orders.models import Order, OrderItem, TicketType
 
 
-def create_user(session: Session) -> User:
-    user = User(email=f"{uuid.uuid4().hex}@example.com", password_hash="x")
+def create_user(session: Session, *, email_verified: bool = True) -> User:
+    """A user with a confirmed email, as buying tickets requires; pass email_verified=False
+    for one who has not opened the link yet."""
+    user = User(
+        email=f"{uuid.uuid4().hex}@example.com", password_hash="x", email_verified=email_verified
+    )
     session.add(user)
     session.flush()
     return user

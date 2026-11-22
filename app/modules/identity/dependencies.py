@@ -5,6 +5,7 @@ from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.common.errors import EmailNotVerifiedError
 from app.core.db import get_session
 from app.modules.identity.enums import SystemRole
 from app.modules.identity.models import OrganizerProfile, User
@@ -15,6 +16,12 @@ SessionDep = Annotated[Session, Depends(get_session)]
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
 
 ACCOUNT_SUSPENDED = "Account is suspended"
+EMAIL_NOT_VERIFIED = "Confirm your email address first: open the link we emailed you"
+# OpenAPI text for the 403 of the routes that use VerifiedUser.
+EMAIL_NOT_VERIFIED_DOC = (
+    'Email not confirmed: {"detail": "...", "code": "EMAIL_NOT_VERIFIED"}. '
+    "A new link: POST /auth/verify-email/resend."
+)
 
 
 def get_current_user(
@@ -40,6 +47,19 @@ def get_current_user(
 
 
 CurrentUser = Annotated[User, Depends(get_current_user)]
+
+
+def require_verified_email(user: CurrentUser) -> User:
+    """The logged-in user, if their email is confirmed; otherwise 403 with code
+    EMAIL_NOT_VERIFIED (the web offers to resend the link). Logging in never needs it, so a
+    mail outage can lock no one out; buying tickets and publishing an event do (TZ UC1, R-9).
+    """
+    if not user.email_verified:
+        raise EmailNotVerifiedError(EMAIL_NOT_VERIFIED)
+    return user
+
+
+VerifiedUser = Annotated[User, Depends(require_verified_email)]
 
 
 def require_platform_admin(user: CurrentUser) -> User:

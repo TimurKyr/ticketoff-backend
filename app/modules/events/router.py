@@ -18,7 +18,12 @@ from app.modules.events.schemas import (
     EventUpdate,
     VenueOut,
 )
-from app.modules.identity.dependencies import CurrentUser, require_organizer
+from app.modules.identity.dependencies import (
+    EMAIL_NOT_VERIFIED_DOC,
+    CurrentUser,
+    VerifiedUser,
+    require_organizer,
+)
 from app.modules.identity.models import OrganizerProfile
 from app.modules.payments import service as payments_service
 
@@ -101,8 +106,13 @@ def duplicate_event(event: OwnedEventDep, session: SessionDep) -> Event:
     return _out(session, service.duplicate_event(session, event))
 
 
-@events_router.post("/{event_id}/publish", response_model=EventOut, summary="Publish a draft")
-def publish_event(event: OwnedEventDep, user: CurrentUser, session: SessionDep) -> Event:
+@events_router.post(
+    "/{event_id}/publish",
+    response_model=EventOut,
+    summary="Publish a draft",
+    responses={403: {"description": EMAIL_NOT_VERIFIED_DOC}},
+)
+def publish_event(event: OwnedEventDep, user: VerifiedUser, session: SessionDep) -> Event:
     return _out(session, service.publish_event(session, event, user))
 
 

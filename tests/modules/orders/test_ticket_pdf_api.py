@@ -13,6 +13,7 @@ from app.modules.events.enums import EventStatus
 from app.modules.events.models import Event, Row, Seat, VenueSection
 from app.modules.orders.enums import OrderStatus, TicketStatus
 from app.modules.orders.models import Ticket, TicketType
+from tests.emails import confirm_email
 from tests.factories import create_event, create_free_ticket_type, create_organizer
 from tests.markers import postgres_only
 from tests.modules.orders.test_ticket_pdf import decode_qr, page_text
@@ -41,6 +42,7 @@ def login(api: TestClient) -> Callable[[], Headers]:
             api.post("/auth/register", json={"email": email, "password": password}).status_code
             == 201
         )
+        confirm_email(api, email)
         token = api.post("/auth/login", data={"username": email, "password": password}).json()[
             "access_token"
         ]

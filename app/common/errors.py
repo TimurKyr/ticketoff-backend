@@ -2,7 +2,13 @@
 
 
 class DomainError(Exception):
-    """Base class for expected business errors."""
+    """Base class for expected business errors.
+
+    `code`, when set, is a stable machine-readable reason sent next to `detail`, so a client
+    can react to it (show a specific message or action) without parsing the English text.
+    """
+
+    code: str | None = None
 
 
 class NotFoundError(DomainError):
@@ -11,6 +17,12 @@ class NotFoundError(DomainError):
 
 class PermissionDeniedError(DomainError):
     """The caller is not allowed to act on this entity."""
+
+
+class EmailNotVerifiedError(PermissionDeniedError):
+    """The action needs a confirmed email address (403, code EMAIL_NOT_VERIFIED)."""
+
+    code = "EMAIL_NOT_VERIFIED"
 
 
 class BusinessRuleError(DomainError):

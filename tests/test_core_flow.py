@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from app.modules.events.models import Venue
+from tests.emails import confirm_email
 from tests.markers import postgres_only
 from tests.qr import decode_qr_png
 
@@ -26,6 +27,7 @@ def _account(api: TestClient, role: str) -> tuple[str, dict[str, str]]:
     email = f"{role}-{uuid.uuid4().hex[:10]}@example.com"
     response = api.post("/auth/register", json={"email": email, "password": PASSWORD})
     assert response.status_code == 201, response.text
+    confirm_email(api, email)
     response = api.post("/auth/login", data={"username": email, "password": PASSWORD})
     assert response.status_code == 200, response.text
     return email, {"Authorization": f"Bearer {response.json()['access_token']}"}
