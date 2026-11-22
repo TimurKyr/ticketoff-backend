@@ -320,11 +320,17 @@ def test_showcase_covers_cities_categories_dates_and_prices(
     assert almaty
     assert {venues[item["venue_id"]] for item in almaty} == {"Алматы"}
 
-    today = datetime.now(seed_demo.TZ).date()
+    now = datetime.now(seed_demo.TZ)
+    today = now.date()
     days = {
         (e.start_at.astimezone(seed_demo.TZ).date() - today).days for e in result.events.values()
     }
-    assert {0, 1} <= days
+    # Late in the evening (Almaty, from 22:00) the earliest start the seed allows for today's
+    # event (the next full hour after now + START_LEAD) is already past midnight, so the
+    # event moves to tomorrow: then only "tomorrow" is guaranteed.
+    earliest = (now + seed_demo.START_LEAD).replace(minute=0, second=0, microsecond=0)
+    late_evening = (earliest + timedelta(hours=1)).date() > today
+    assert ({1} if late_evening else {0, 1}) <= days
     for key in past:
         event = result.events[key]
         assert event.end_at < datetime.now(UTC)
