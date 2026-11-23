@@ -92,6 +92,9 @@ class Event(Base):
         index=True,
     )
     title = Column(String, nullable=False)
+    # The readable link /events/{slug} (BE-35), from the title at creation; never changes
+    # with the title. NULL for private events (their link is the UUID). See events.slugs.
+    slug = Column(String(80), unique=True)
     description = Column(Text)
     # Shown to buyers before they pay (BE-19); free text, optional.
     refund_policy = Column(Text)

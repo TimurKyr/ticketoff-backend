@@ -669,3 +669,108 @@ def test_list_filters_require_timezone(client: TestClient) -> None:
     response = client.get("/events", params={"from_date": "2030-01-01T00:00:00"})
 
     assert response.status_code == 422
+
+
+# --- slugs (BE-35): every title carries the tag, so slugs stay unique ---------------
+
+
+def test_new_event_gets_a_slug_from_its_title(
+    client: TestClient, org: Headers, venue: Venue, tag: str
+) -> None:
+    event = _create(client, org, venue, title=f"Джаз-вечер Алматы {tag}")
+    assert event["slug"] == f"dzhaz-vecher-almaty-{tag}"
+
+
+def test_same_title_gets_numbered_slugs(
+    client: TestClient, org: Headers, venue: Venue, tag: str
+) -> None:
+    title = f"Концерт {tag}"
+    found = [_create(client, org, venue, title=title)["slug"] for _ in range(3)]
+    assert found == [f"kontsert-{tag}", f"kontsert-{tag}-2", f"kontsert-{tag}-3"]
+
+
+def test_public_event_opens_by_slug_and_by_id(
+    client: TestClient, org: Headers, venue: Venue, tag: str
+) -> None:
+    event = _create(client, org, venue, title=f"Open {tag}")
+    _publish(client, org, event["id"])
+
+    by_slug = client.get(f"/events/{event['slug']}")
+    assert by_slug.status_code == 200, by_slug.text
+    assert by_slug.json()["id"] == event["id"]
+    by_id = client.get(f"/events/{event['id']}")
+    assert by_id.status_code == 200
+    assert by_id.json()["slug"] == event["slug"]
+
+
+def test_unlisted_event_has_a_slug(
+    client: TestClient, org: Headers, venue: Venue, tag: str
+) -> None:
+    event = _create(client, org, venue, title=f"Unlisted {tag}", visibility="unlisted")
+    _publish(client, org, event["id"])
+    assert client.get(f"/events/unlisted-{tag}").status_code == 200
+
+
+def test_draft_is_not_found_by_slug(
+    client: TestClient, org: Headers, venue: Venue, tag: str
+) -> None:
+    event = _create(client, org, venue, title=f"Draft {tag}")
+    assert event["slug"] == f"draft-{tag}"
+    assert client.get(f"/events/{event['slug']}").status_code == 404
+    assert client.get(f"/events/no-such-event-{tag}").status_code == 404
+
+
+def test_private_event_has_no_slug(
+    client: TestClient, org: Headers, venue: Venue, tag: str
+) -> None:
+    event = _create(client, org, venue, title=f"Private {tag}", visibility="private")
+    assert event["slug"] is None
+    _publish(client, org, event["id"])
+    assert client.get(f"/events/private-{tag}").status_code == 404
+    assert client.get(f"/events/{event['id']}").status_code == 404  # as before BE-35
+
+
+def test_slug_survives_a_title_edit(
+    client: TestClient, org: Headers, venue: Venue, tag: str
+) -> None:
+    event = _create(client, org, venue, title=f"First {tag}")
+    _publish(client, org, event["id"])
+    edited = client.patch(f"/events/{event['id']}", json={"title": f"Second {tag}"}, headers=org)
+    assert edited.status_code == 200, edited.text
+    assert edited.json()["slug"] == f"first-{tag}"
+    assert client.get(f"/events/first-{tag}").json()["title"] == f"Second {tag}"
+
+
+def test_going_private_drops_the_slug_and_back_gets_one(
+    client: TestClient, org: Headers, venue: Venue, tag: str
+) -> None:
+    event = _create(client, org, venue, title=f"Switch {tag}")
+    _publish(client, org, event["id"])
+
+    private = client.patch(f"/events/{event['id']}", json={"visibility": "private"}, headers=org)
+    assert private.json()["slug"] is None
+    assert client.get(f"/events/switch-{tag}").status_code == 404
+
+    public = client.patch(f"/events/{event['id']}", json={"visibility": "public"}, headers=org)
+    assert public.json()["slug"] == f"switch-{tag}"
+
+
+def test_duplicate_gets_its_own_slug(
+    client: TestClient, org: Headers, venue: Venue, tag: str
+) -> None:
+    event = _create(client, org, venue, title=f"Copy me {tag}")
+    copy = client.post(f"/events/{event['id']}/duplicate", headers=org)
+    assert copy.status_code == 201, copy.text
+    assert copy.json()["slug"] == f"copy-me-{tag}-2"
+    assert client.get(f"/organizer/events/{event['id']}", headers=org).json()["slug"] == (
+        f"copy-me-{tag}"
+    )
+
+
+def test_list_items_carry_the_slug(
+    client: TestClient, org: Headers, venue: Venue, tag: str
+) -> None:
+    event = _create(client, org, venue, title=f"Listed {tag}")
+    _publish(client, org, event["id"])
+    items = client.get("/events", params={"q": tag}).json()["items"]
+    assert [e["slug"] for e in items] == [f"listed-{tag}"]

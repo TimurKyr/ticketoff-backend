@@ -1,7 +1,7 @@
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Query, Response, status
+from fastapi import APIRouter, Depends, Path, Query, Response, status
 from pydantic import AwareDatetime
 from sqlalchemy.orm import Session
 
@@ -85,7 +85,13 @@ def list_public_events(
 
 
 @events_router.get("/{event_id}", response_model=EventOut, summary="Public event page")
-def get_event(event_id: uuid.UUID, session: SessionDep) -> Event:
+def get_event(
+    event_id: Annotated[
+        str, Path(max_length=80, description="The event's id (UUID) or its slug (BE-35)")
+    ],
+    session: SessionDep,
+) -> Event:
+    """By id or by slug: /events/dzhaz-vecher-almaty. Private events have no slug."""
     return _out(session, service.get_public_event(session, event_id))
 
 

@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from app.common.errors import BusinessRuleError, InvalidInputError, NotFoundError
 from app.modules.audit import repository as audit_repository
 from app.modules.audit import service as audit
-from app.modules.events import calendar, repository
+from app.modules.events import calendar, repository, slugs
 from app.modules.events.enums import EventStatus, EventVisibility
 from app.modules.events.models import Event, Venue
 from app.modules.events.schemas import (
@@ -91,9 +91,20 @@ def _require_not_ended(start_at: datetime, end_at: datetime | None, message: str
         raise BusinessRuleError(message)
 
 
+def _sync_slug(session: Session, event: Event) -> None:
+    """Private events have no slug (their UUID link cannot be guessed); any other event
+    keeps the one it has, or gets one from its current title. Never renamed on a title
+    edit, so links already shared keep working."""
+    if event.visibility == EventVisibility.PRIVATE:
+        event.slug = None
+    elif event.slug is None:
+        event.slug = slugs.unique_slug(session, event.title)
+
+
 def create_event(session: Session, organizer: OrganizerProfile, payload: EventCreate) -> Event:
     _require_venue(session, payload.venue_id)
     event = Event(organizer_id=organizer.id, status=EventStatus.DRAFT, **payload.model_dump())
+    _sync_slug(session, event)
     repository.add_event(session, event)
     session.commit()
     return event
@@ -134,6 +145,8 @@ def update_event(session: Session, event: Event, payload: EventUpdate, user: Use
     before = notification_flows.schedule_of(event)
     for name, value in changes.items():
         setattr(event, name, value)
+    if "visibility" in changes:
+        _sync_slug(session, event)
     # Ticket holders hear about a new time or venue of a published event (after the commit).
     notification_flows.event_updated(session, event, before)
     if "capacity" in changes and changes["capacity"] != old_capacity:
@@ -171,6 +184,7 @@ def duplicate_event(session: Session, event: Event) -> Event:
         registration_opens_at=event.registration_opens_at,
         registration_closes_at=event.registration_closes_at,
     )
+    _sync_slug(session, copy)  # its own slug: the original keeps its link
     repository.add_event(session, copy)
     for ticket_type in orders_repository.list_by_event(session, event.id, include_hidden=True):
         session.add(
@@ -234,10 +248,15 @@ def mark_cancelled(session: Session, event: Event) -> None:
     event.status = EventStatus.CANCELLED
 
 
-def get_public_event(session: Session, event_id: uuid.UUID) -> Event:
-    """Published public/unlisted events only. Everything else is a plain 404,
-    so the API never reveals that a private or draft event exists."""
-    event = repository.get_event(session, event_id)
+def get_public_event(session: Session, key: uuid.UUID | str) -> Event:
+    """Published public/unlisted events only, by id or by slug (BE-35). Everything else is
+    a plain 404, so the API never reveals that a private or draft event exists."""
+    if isinstance(key, str) and slugs.is_uuid(key):
+        key = uuid.UUID(key)
+    if isinstance(key, uuid.UUID):
+        event = repository.get_event(session, key)
+    else:
+        event = repository.get_event_by_slug(session, key)
     if (
         event is None
         or event.status != EventStatus.PUBLISHED
