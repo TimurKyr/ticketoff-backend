@@ -182,7 +182,7 @@ def test_the_token_is_never_logged(
 
 
 def test_verifying_twice_gives_the_same_answer(db_session: Session, api: TestClient) -> None:
-    user = create_user(db_session)
+    user = create_user(db_session, email_verified=False)
     token = create_email_verification_token(user.id, user.email)
 
     first, second = verify(api, token), verify(api, token)
@@ -267,7 +267,7 @@ def bad_tokens(user: User) -> dict[str, str]:
 def test_every_bad_token_gets_the_same_error(
     db_session: Session, api: TestClient, kind: str
 ) -> None:
-    user = create_user(db_session)
+    user = create_user(db_session, email_verified=False)
 
     response = verify(api, bad_tokens(user)[kind])
 
@@ -278,7 +278,7 @@ def test_every_bad_token_gets_the_same_error(
 
 
 def test_a_link_for_an_old_email_is_void(db_session: Session, api: TestClient) -> None:
-    user = create_user(db_session)
+    user = create_user(db_session, email_verified=False)
     token = create_email_verification_token(user.id, user.email)
     user.email = new_email()  # the address changed after the link was sent
     db_session.flush()
@@ -299,7 +299,7 @@ def test_missing_or_oversized_token_is_422(api: TestClient, body: dict) -> None:
 
 
 def test_a_verification_token_is_not_a_login(db_session: Session, api: TestClient) -> None:
-    user = create_user(db_session)
+    user = create_user(db_session, email_verified=False)
     token = create_email_verification_token(user.id, user.email)
 
     assert decode_access_token(token) is None
@@ -309,7 +309,7 @@ def test_a_verification_token_is_not_a_login(db_session: Session, api: TestClien
 
 
 def test_an_access_token_is_not_a_verification_link(db_session: Session) -> None:
-    user = create_user(db_session)
+    user = create_user(db_session, email_verified=False)
     access = create_access_token(user.id)
 
     assert decode_email_verification_token(access) is None
@@ -318,7 +318,7 @@ def test_an_access_token_is_not_a_verification_link(db_session: Session) -> None
 
 def test_a_jwt_without_typ_is_not_a_login(db_session: Session, api: TestClient) -> None:
     # Before BE-18 access tokens had no typ: any JWT with our secret and a sub logged in.
-    user = create_user(db_session)
+    user = create_user(db_session, email_verified=False)
     untyped = signed({"sub": str(user.id), "exp": in_a_day()})
 
     assert decode_access_token(untyped) is None
@@ -331,7 +331,7 @@ def test_a_jwt_without_typ_is_not_a_login(db_session: Session, api: TestClient) 
 def test_resend_sends_a_fresh_working_link(
     db_session: Session, api: TestClient, emails: RecordingEmailProvider
 ) -> None:
-    user = create_user(db_session)
+    user = create_user(db_session, email_verified=False)
 
     response = api.post("/auth/verify-email/resend", headers=bearer(create_access_token(user.id)))
 
@@ -344,7 +344,7 @@ def test_resend_sends_a_fresh_working_link(
 def test_resend_when_already_verified_is_409(
     db_session: Session, api: TestClient, emails: RecordingEmailProvider
 ) -> None:
-    user = create_user(db_session)
+    user = create_user(db_session, email_verified=False)
     user.email_verified = True
     db_session.flush()
 
@@ -379,7 +379,7 @@ def resend(api: TestClient, user: User):
 def test_resending_twice_quickly_is_429_and_queues_nothing(
     db_session: Session, api: TestClient, emails: RecordingEmailProvider
 ) -> None:
-    user = create_user(db_session)
+    user = create_user(db_session, email_verified=False)
 
     assert resend(api, user).status_code == 204
     second = resend(api, user)
@@ -394,7 +394,7 @@ def test_resending_twice_quickly_is_429_and_queues_nothing(
 def test_retry_after_counts_down_from_the_last_send(
     db_session: Session, api: TestClient, emails: RecordingEmailProvider
 ) -> None:
-    user = create_user(db_session)
+    user = create_user(db_session, email_verified=False)
     user.email_verification_sent_at = datetime.now(UTC) - timedelta(seconds=45)
     db_session.flush()
 
@@ -408,7 +408,7 @@ def test_retry_after_counts_down_from_the_last_send(
 def test_resend_works_again_after_the_cooldown(
     db_session: Session, api: TestClient, emails: RecordingEmailProvider
 ) -> None:
-    user = create_user(db_session)
+    user = create_user(db_session, email_verified=False)
     assert resend(api, user).status_code == 204
     # Move the last send back past the cooldown instead of sleeping 60 s.
     db_session.refresh(user)
@@ -439,7 +439,7 @@ def test_registration_counts_as_a_send(
 
 
 def test_already_verified_wins_over_the_cooldown(db_session: Session, api: TestClient) -> None:
-    user = create_user(db_session)
+    user = create_user(db_session, email_verified=False)
     user.email_verified = True
     user.email_verification_sent_at = datetime.now(UTC)
     db_session.flush()

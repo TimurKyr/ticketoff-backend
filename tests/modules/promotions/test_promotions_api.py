@@ -20,6 +20,7 @@ from app.modules.orders.enums import OrderStatus
 from app.modules.orders.models import Order, TicketType
 from app.modules.orders.schemas import PRICE_KZT_MAX, QUANTITY_MAX
 from app.modules.promotions.models import PromoCode, PromoRedemption, PromotionalCampaign
+from tests.emails import confirm_email
 from tests.factories import create_event, create_ticket_type
 from tests.markers import postgres_only
 from tests.qr import decode_qr_png
@@ -49,6 +50,7 @@ def login(api: TestClient) -> Callable[[], Headers]:
             api.post("/auth/register", json={"email": email, "password": password}).status_code
             == 201
         )
+        confirm_email(api, email)
         token = api.post("/auth/login", data={"username": email, "password": password}).json()[
             "access_token"
         ]

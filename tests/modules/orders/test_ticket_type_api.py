@@ -12,6 +12,7 @@ from app.main import app
 from app.modules.events.enums import EventStatus, EventVisibility
 from app.modules.events.models import Event
 from app.modules.identity.models import OrganizerProfile
+from tests.emails import confirm_email
 from tests.factories import create_event, create_organizer
 from tests.markers import postgres_only
 
@@ -44,6 +45,7 @@ def login(api: TestClient) -> Callable[[], Headers]:
             api.post("/auth/register", json={"email": email, "password": password}).status_code
             == 201
         )
+        confirm_email(api, email)
         token = api.post("/auth/login", data={"username": email, "password": password}).json()[
             "access_token"
         ]

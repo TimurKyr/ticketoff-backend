@@ -12,6 +12,7 @@ from app.core.db import get_session
 from app.main import app
 from app.modules.events.models import Venue
 from app.modules.events.schemas import REFUND_POLICY_MAX_LENGTH
+from tests.emails import confirm_email
 
 Headers = dict[str, str]
 POLICY = "Full refund up to 48 hours before the start. Возврат не позднее чем за 48 часов."
@@ -29,6 +30,7 @@ def organizer(api: TestClient) -> Headers:
     assert (
         api.post("/auth/register", json={"email": email, "password": password}).status_code == 201
     )
+    confirm_email(api, email)
     token = api.post("/auth/login", data={"username": email, "password": password}).json()[
         "access_token"
     ]

@@ -12,6 +12,7 @@ from app.main import app
 from app.modules.events.models import Event
 from app.modules.orders.models import TicketType
 from app.modules.orders.qr import verify_ticket_token
+from tests.emails import confirm_email
 from tests.factories import create_event, create_organizer, create_ticket_type
 from tests.markers import postgres_only
 
@@ -31,6 +32,7 @@ def login(api: TestClient) -> Callable[[], Headers]:
     def make() -> Headers:
         email, password = f"user-{uuid.uuid4().hex[:12]}@example.com", "correct-horse-battery"
         api.post("/auth/register", json={"email": email, "password": password})
+        confirm_email(api, email)
         token = api.post("/auth/login", data={"username": email, "password": password}).json()[
             "access_token"
         ]

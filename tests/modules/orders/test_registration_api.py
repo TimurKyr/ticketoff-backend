@@ -13,6 +13,7 @@ from app.modules.identity.models import OrganizerProfile
 from app.modules.identity.security import create_access_token
 from app.modules.orders.models import TicketType
 from app.modules.orders.qr import verify_ticket_token
+from tests.emails import confirm_email
 from tests.factories import (
     create_event,
     create_free_ticket_type,
@@ -44,6 +45,7 @@ def login(api: TestClient) -> Callable[[], Headers]:
             api.post("/auth/register", json={"email": email, "password": password}).status_code
             == 201
         )
+        confirm_email(api, email)
         token = api.post("/auth/login", data={"username": email, "password": password}).json()[
             "access_token"
         ]

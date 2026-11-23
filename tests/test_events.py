@@ -40,7 +40,11 @@ def make_user(db: Session) -> UserFactory:
     """Create a user (optionally with an organizer profile) and a Bearer header for it."""
 
     def _make(organizer: bool = False) -> tuple[User, Headers]:
-        user = User(email=f"{uuid.uuid4().hex}@example.com", password_hash=hash_password("x" * 12))
+        user = User(
+            email=f"{uuid.uuid4().hex}@example.com",
+            password_hash=hash_password("x" * 12),
+            email_verified=True,  # publishing an event needs a confirmed email
+        )
         db.add(user)
         db.flush()
         if organizer:

@@ -38,7 +38,7 @@ def test_a_cross_origin_429_from_resend_carries_and_exposes_retry_after(
     client: TestClient, db_session: Session
 ) -> None:
     app.dependency_overrides[get_session] = lambda: db_session
-    user = create_user(db_session)
+    user = create_user(db_session, email_verified=False)
     headers = {
         "Origin": get_settings().cors_origin_list[0],
         "Authorization": f"Bearer {create_access_token(user.id)}",

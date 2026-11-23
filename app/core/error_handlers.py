@@ -27,7 +27,10 @@ async def _domain_error(_: Request, exc: Exception) -> JSONResponse:
         status.HTTP_400_BAD_REQUEST,
     )
     headers = {"Retry-After": str(exc.retry_after)} if isinstance(exc, RateLimitedError) else None
-    return JSONResponse(status_code=code, content={"detail": str(exc)}, headers=headers)
+    content: dict[str, str] = {"detail": str(exc)}
+    if isinstance(exc, DomainError) and exc.code is not None:
+        content["code"] = exc.code
+    return JSONResponse(status_code=code, content=content, headers=headers)
 
 
 def add_error_handlers(app: FastAPI) -> None:
