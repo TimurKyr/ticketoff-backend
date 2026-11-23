@@ -49,11 +49,10 @@ def make_venue(db: Session) -> Callable[..., Venue]:
 
 @pytest.fixture
 def org(db: Session) -> Headers:
-    # Verified: publishing needs a confirmed email since #35 (the factory default too).
     user = User(
         email=f"{uuid.uuid4().hex}@example.com",
         password_hash=hash_password("x" * 12),
-        email_verified=True,
+        email_verified=True,  # publishing an event needs a confirmed email
     )
     db.add(user)
     db.flush()
