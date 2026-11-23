@@ -4,7 +4,7 @@ New table support_attachments: the metadata of a file sent with a support messag
 bytes are in the attachment storage (docker volume), not in the database.
 
 Revision ID: b8d2f6a41c97
-Revises: e7b3c9a15d84
+Revises: 34775f22b9f7
 Create Date: 2026-11-24 10:00:00.000000
 
 """
@@ -16,7 +16,7 @@ import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
 revision: str = 'b8d2f6a41c97'
-down_revision: str | None = 'e7b3c9a15d84'
+down_revision: str | None = '34775f22b9f7'
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
