@@ -106,12 +106,15 @@ def get_code_qr(
 @promo_router.post(
     "/events/{event_id}/promo-codes/check",
     response_model=PromoCheckOut,
+    # Without `items` the answer has exactly the fields it had before BE-29, plus
+    # ticket_type_ids; eligible_subtotal_kzt and discount_kzt come only with items.
+    response_model_exclude_none=True,
     summary="Check a promo code before paying (does not use it up)",
 )
 def check_code(
     event_id: uuid.UUID, payload: PromoCheckIn, _: CurrentUser, session: SessionDep
 ) -> PromoCheckOut:
-    return service.check_code(session, event_id, payload.code)
+    return service.check_code(session, event_id, payload.code, payload.items)
 
 
 @promo_router.get(

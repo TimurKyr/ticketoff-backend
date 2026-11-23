@@ -2,13 +2,19 @@
 
 import secrets
 import uuid
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.common.errors import BusinessRuleError, NotFoundError
+from app.common.errors import (
+    BusinessRuleError,
+    InvalidInputError,
+    NotFoundError,
+    PromoNotApplicableError,
+)
 from app.core.config import get_settings
 from app.modules.audit import service as audit
 from app.modules.events import service as events_service
@@ -16,6 +22,7 @@ from app.modules.events.enums import EventStatus
 from app.modules.events.models import Event
 from app.modules.identity.models import User
 from app.modules.orders.models import Order
+from app.modules.orders.schemas import RegistrationItemIn
 from app.modules.promotions import repository
 from app.modules.promotions.enums import DiscountType, PromoCodeStatus
 from app.modules.promotions.models import PromoCode, PromoRedemption, PromotionalCampaign
@@ -38,6 +45,27 @@ _CODE_LENGTH = 8
 _CODE_TRIES = 5
 
 CLOSED_EVENT_STATUSES = (EventStatus.CANCELLED, EventStatus.COMPLETED)
+
+# BE-29 / R-77: the code is valid, but for none of the tickets being bought (409).
+NOT_APPLICABLE = "This promo code does not apply to the selected tickets"
+
+
+@dataclass(frozen=True, slots=True)
+class Line:
+    """One line of an order (or of a promo check): a ticket type, its price and how many."""
+
+    ticket_type_id: uuid.UUID
+    unit_price_kzt: int
+    quantity: int
+
+
+@dataclass(frozen=True, slots=True)
+class Quote:
+    """A campaign's discount on some lines: the price of the lines it applies to, and the
+    discount on them."""
+
+    eligible_subtotal_kzt: int
+    discount_kzt: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,8 +92,18 @@ def create_campaign(
     session: Session, user: User, event: Event, data: CampaignCreate
 ) -> CampaignOut:
     _ensure_event_open(event)
-    campaign = PromotionalCampaign(event_id=event.id, **data.model_dump())
+    type_ids = data.ticket_type_ids
+    known = repository.ticket_type_prices(session, event.id, type_ids)
+    missing = [str(type_id) for type_id in type_ids if type_id not in known]
+    if missing:
+        raise InvalidInputError(
+            "ticket_type_ids must be ticket types of this event; not found: " + ", ".join(missing)
+        )
+    campaign = PromotionalCampaign(
+        event_id=event.id, **data.model_dump(exclude={"ticket_type_ids"})
+    )
     repository.add(session, campaign)
+    repository.add_campaign_ticket_types(session, campaign.id, type_ids)
     audit.log(
         session,
         actor_user_id=user.id,
@@ -77,14 +115,31 @@ def create_campaign(
             "name": campaign.name,
             "discount_type": campaign.discount_type.value,
             "discount_value": campaign.discount_value,
+            "ticket_type_ids": sorted(str(type_id) for type_id in type_ids),
         },
     )
-    session.commit()  # the campaign and its audit row together
-    return CampaignOut.model_validate(campaign)
+    session.commit()  # the campaign, its ticket types and its audit row together
+    return _campaign_out(campaign, sorted(type_ids))
+
+
+def _campaign_out(campaign: PromotionalCampaign, ticket_type_ids: list[uuid.UUID]) -> CampaignOut:
+    return CampaignOut(
+        id=campaign.id,
+        event_id=campaign.event_id,
+        name=campaign.name,
+        discount_type=campaign.discount_type,
+        discount_value=campaign.discount_value,
+        max_redemptions=campaign.max_redemptions,
+        starts_at=campaign.starts_at,
+        ends_at=campaign.ends_at,
+        ticket_type_ids=ticket_type_ids,
+    )
 
 
 def list_campaigns(session: Session, event: Event) -> list[CampaignOut]:
-    return [CampaignOut.model_validate(c) for c in repository.list_campaigns(session, event.id)]
+    campaigns = repository.list_campaigns(session, event.id)
+    types = repository.campaign_ticket_type_ids(session, [c.id for c in campaigns])  # one query
+    return [_campaign_out(c, types.get(c.id, [])) for c in campaigns]
 
 
 def _get_campaign(session: Session, event: Event, campaign_id: uuid.UUID) -> PromotionalCampaign:
@@ -245,19 +300,58 @@ def code_qr_png(
 # --- buyer: check a code, scan a campaign QR ------------------------------------------------
 
 
-def discount_for(campaign: PromotionalCampaign, total_kzt: int) -> int:
+def discount_for(
+    campaign: PromotionalCampaign, total_kzt: int, eligible_subtotal_kzt: int | None = None
+) -> int:
     """The discount in KZT on an order worth `total_kzt` before the discount.
+
+    It is worked out on `eligible_subtotal_kzt`, the price of the items the campaign applies
+    to (BE-29; None: the whole order, as for a campaign of every type): a percent of it
+    (rounded down), or the fixed amount but never more than it.
 
     A payment must be more than 0 KZT (a database rule), so a code never makes an order
     completely free: the buyer always pays at least 1 KZT.
     """
-    if total_kzt <= 1:
+    eligible = total_kzt if eligible_subtotal_kzt is None else eligible_subtotal_kzt
+    if total_kzt <= 1 or eligible <= 0:
         return 0
     if campaign.discount_type == DiscountType.PERCENT:
-        discount = total_kzt * campaign.discount_value // 100
+        discount = eligible * campaign.discount_value // 100
     else:
-        discount = campaign.discount_value
+        discount = min(campaign.discount_value, eligible)
     return min(discount, total_kzt - 1)
+
+
+def quote(session: Session, campaign: PromotionalCampaign, lines: Sequence[Line]) -> Quote:
+    """The campaign's discount on these lines: the one calculation for check and checkout.
+
+    The campaign applies to its ticket types (every type when it lists none). A code that
+    applies to none of the lines is refused with NOT_APPLICABLE (409).
+    """
+    targets = set(repository.campaign_ticket_type_ids(session, [campaign.id]).get(campaign.id, []))
+    matching = [ln for ln in lines if not targets or ln.ticket_type_id in targets]
+    if not matching:
+        raise PromoNotApplicableError(NOT_APPLICABLE)
+    eligible = sum(ln.unit_price_kzt * ln.quantity for ln in matching)
+    total = sum(ln.unit_price_kzt * ln.quantity for ln in lines)
+    return Quote(
+        eligible_subtotal_kzt=eligible, discount_kzt=discount_for(campaign, total, eligible)
+    )
+
+
+def _lines_for_check(
+    session: Session, event_id: uuid.UUID, items: Iterable[RegistrationItemIn]
+) -> list[Line]:
+    """Price the buyer's items from the DB (never from the client). A type that is not one of
+    this event's is a 422."""
+    quantities: dict[uuid.UUID, int] = {}
+    for item in items:  # the same type twice is one line
+        quantities[item.ticket_type_id] = quantities.get(item.ticket_type_id, 0) + item.quantity
+    prices = repository.ticket_type_prices(session, event_id, quantities)
+    unknown = [str(type_id) for type_id in quantities if type_id not in prices]
+    if unknown:
+        raise InvalidInputError("Ticket type not found for this event: " + ", ".join(unknown))
+    return [Line(type_id, prices[type_id], qty) for type_id, qty in quantities.items()]
 
 
 def _check_redeemable(
@@ -283,17 +377,30 @@ def _check_redeemable(
 
 
 def check_code(
-    session: Session, event_id: uuid.UUID, raw_code: str, now: datetime | None = None
+    session: Session,
+    event_id: uuid.UUID,
+    raw_code: str,
+    items: Sequence[RegistrationItemIn] | None = None,
+    now: datetime | None = None,
 ) -> PromoCheckOut:
-    """Answer a buyer's "does this code work?" without using it up."""
+    """Answer a buyer's "does this code work?" without using it up.
+
+    Without `items` it answers as before (plus the code's ticket types). With them, it also
+    gives the discount on exactly those tickets, or 409 NOT_APPLICABLE if it applies to none.
+    """
     now = now or datetime.now(UTC)
     events_service.get_public_event(session, event_id)  # 404 for a draft or private event
     code, campaign = _check_redeemable(session, event_id, raw_code, now)
+    targets = repository.campaign_ticket_type_ids(session, [campaign.id]).get(campaign.id, [])
+    result = quote(session, campaign, _lines_for_check(session, event_id, items)) if items else None
     return PromoCheckOut(
         code=code.code,
         campaign_name=campaign.name,
         discount_type=campaign.discount_type,
         discount_value=campaign.discount_value,
+        ticket_type_ids=targets,
+        eligible_subtotal_kzt=result.eligible_subtotal_kzt if result else None,
+        discount_kzt=result.discount_kzt if result else None,
     )
 
 
@@ -318,16 +425,19 @@ def resolve_qr(session: Session, qr_token: str, now: datetime | None = None) -> 
 
 
 def apply_at_checkout(
-    session: Session, event_id: uuid.UUID, raw_code: str, total_kzt: int, now: datetime
+    session: Session, event_id: uuid.UUID, raw_code: str, lines: Sequence[Line], now: datetime
 ) -> AppliedPromo:
-    """Check the code and work out its discount on this order.
+    """Check the code and work out its discount on this order's lines (priced from the
+    locked ticket types).
 
     The caller (orders.service.checkout) holds the event row lock, taken before this runs.
     Every checkout of the event takes that lock first, so two buyers cannot both take the
     last use of a campaign: the second one counts after the first one's order exists.
+    A refusal (including NOT_APPLICABLE) raises before the order exists, so nothing is held
+    and no use is counted.
     """
     code, campaign = _check_redeemable(session, event_id, raw_code, now)
-    discount = discount_for(campaign, total_kzt)
+    discount = quote(session, campaign, lines).discount_kzt
     if discount <= 0:
         raise BusinessRuleError("This promo code gives no discount on this order")
     return AppliedPromo(code_id=code.id, discount_kzt=discount)

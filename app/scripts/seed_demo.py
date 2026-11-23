@@ -84,6 +84,9 @@ TZ = ZoneInfo(TZ_NAME)
 MIN_PASSWORD_LENGTH = 8  # same as RegisterIn
 
 ORGANIZER_EMAIL = "demo.organizer@ticketoff.store"
+# Shown to buyers on every demo event (EventOut.organizer).
+ORGANIZER_CONTACT_EMAIL = "demo.organizer@ticketoff.store"
+ORGANIZER_WEBSITE = "https://ticketoff.store"
 SCANNER_EMAIL = "demo.scanner@ticketoff.store"
 BUYER_EMAIL = "demo.buyer@ticketoff.store"
 ORGANIZER_NAME = "Ticketoff Demo"
@@ -538,6 +541,13 @@ def _ensure_organizer_profile(session: Session, result: SeedResult, user: User) 
         session.add(profile)
         session.commit()
         result.created.append(f"organizer profile {ORGANIZER_NAME}")
+    # Public contacts (BE-29): filled only while empty, so an organizer's own edit is kept and
+    # a second run changes nothing. No phone: it is never shown publicly anyway.
+    if profile.contact_email is None and profile.website is None:
+        profile.contact_email = ORGANIZER_CONTACT_EMAIL
+        profile.website = ORGANIZER_WEBSITE
+        session.commit()
+        result.created.append(f"organizer contacts {ORGANIZER_CONTACT_EMAIL}")
     return profile
 
 

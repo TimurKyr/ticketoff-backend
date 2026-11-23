@@ -29,6 +29,12 @@ class BusinessRuleError(DomainError):
     """The request breaks a business rule."""
 
 
+class PromoNotApplicableError(BusinessRuleError):
+    """A valid promo code that applies to none of the chosen tickets (409, BE-29 / R-77)."""
+
+    code = "code_not_applicable"
+
+
 class InvalidInputError(DomainError):
     """The request is well-formed but refers to data that does not fit (e.g. unknown venue)."""
 

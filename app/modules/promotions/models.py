@@ -43,6 +43,30 @@ class PromotionalCampaign(Base):
     codes = relationship("PromoCode", back_populates="campaign")
 
 
+class CampaignTicketType(Base):
+    """The ticket types a campaign's codes apply to (BE-29). No rows: every type of the event.
+
+    Both sides are deleted with their parent, so a removed ticket type simply drops out of
+    the campaign's set.
+    """
+
+    __tablename__ = "campaign_ticket_types"
+
+    campaign_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("promotional_campaigns.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    # The PK leads with campaign_id; this index serves "campaigns of a ticket type" and the
+    # cascade from ticket_types.
+    ticket_type_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("ticket_types.id", ondelete="CASCADE"),
+        primary_key=True,
+        index=True,
+    )
+
+
 class PromoCode(Base):
     __tablename__ = "promo_codes"
 

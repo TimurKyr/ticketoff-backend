@@ -10,6 +10,7 @@ def test_models_configure_and_register_all_tables() -> None:
     assert set(Base.metadata.tables) == {
         "attendees",
         "audit_logs",
+        "campaign_ticket_types",
         "check_in_records",
         "events",
         "notifications",

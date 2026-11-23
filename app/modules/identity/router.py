@@ -5,11 +5,12 @@ from fastapi.security import OAuth2PasswordRequestForm
 
 from app.modules.identity import service
 from app.modules.identity.dependencies import ACCOUNT_SUSPENDED, CurrentUser, SessionDep
-from app.modules.identity.models import OrganizerProfile, User
+from app.modules.identity.models import User
 from app.modules.identity.schemas import (
     MeOut,
     OrganizerProfileIn,
     OrganizerProfileOut,
+    OrganizerProfileUpdate,
     TokenOut,
     UserOut,
     UserRegister,
@@ -76,14 +77,14 @@ def read_me(user: CurrentUser, session: SessionDep) -> MeOut:
 )
 def create_organizer_profile(
     payload: OrganizerProfileIn, user: CurrentUser, session: SessionDep
-) -> OrganizerProfile:
-    return service.create_organizer_profile(session, user, payload.display_name)
+) -> OrganizerProfileOut:
+    return service.create_organizer_profile(session, user, payload)
 
 
 @organizer_profile_router.get(
     "", response_model=OrganizerProfileOut, summary="My organizer profile"
 )
-def read_organizer_profile(user: CurrentUser, session: SessionDep) -> OrganizerProfile:
+def read_organizer_profile(user: CurrentUser, session: SessionDep) -> OrganizerProfileOut:
     return service.get_organizer_profile(session, user)
 
 
@@ -91,6 +92,7 @@ def read_organizer_profile(user: CurrentUser, session: SessionDep) -> OrganizerP
     "", response_model=OrganizerProfileOut, summary="Edit my organizer profile"
 )
 def update_organizer_profile(
-    payload: OrganizerProfileIn, user: CurrentUser, session: SessionDep
-) -> OrganizerProfile:
-    return service.update_organizer_profile(session, user, payload.display_name)
+    payload: OrganizerProfileUpdate, user: CurrentUser, session: SessionDep
+) -> OrganizerProfileOut:
+    """Partial update of my profile: send only what changes (null clears a contact)."""
+    return service.update_organizer_profile(session, user, payload)

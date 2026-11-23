@@ -1,17 +1,71 @@
 import uuid
+from collections.abc import Iterable
 from datetime import datetime
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.modules.orders import repository as orders_repository
-from app.modules.orders.models import Order
-from app.modules.promotions.models import PromoCode, PromoRedemption, PromotionalCampaign
+from app.modules.orders.models import Order, TicketType
+from app.modules.promotions.models import (
+    CampaignTicketType,
+    PromoCode,
+    PromoRedemption,
+    PromotionalCampaign,
+)
 
 
-def add(session: Session, row: PromoCode | PromotionalCampaign | PromoRedemption) -> None:
+def add(
+    session: Session,
+    row: PromoCode | PromotionalCampaign | PromoRedemption | CampaignTicketType,
+) -> None:
     session.add(row)
     session.flush()
+
+
+def ticket_type_prices(
+    session: Session, event_id: uuid.UUID, ticket_type_ids: Iterable[uuid.UUID]
+) -> dict[uuid.UUID, int]:
+    """price_kzt of those of the given ticket types that belong to the event (hidden ones too).
+
+    A missing id is unknown or another event's type.
+    """
+    ids = set(ticket_type_ids)
+    if not ids:
+        return {}
+    stmt = select(TicketType.id, TicketType.price_kzt).where(
+        TicketType.event_id == event_id, TicketType.id.in_(ids)
+    )
+    return {type_id: price for type_id, price in session.execute(stmt)}
+
+
+def add_campaign_ticket_types(
+    session: Session, campaign_id: uuid.UUID, ticket_type_ids: Iterable[uuid.UUID]
+) -> None:
+    session.add_all(
+        CampaignTicketType(campaign_id=campaign_id, ticket_type_id=type_id)
+        for type_id in ticket_type_ids
+    )
+    session.flush()
+
+
+def campaign_ticket_type_ids(
+    session: Session, campaign_ids: Iterable[uuid.UUID]
+) -> dict[uuid.UUID, list[uuid.UUID]]:
+    """Each campaign's ticket types, sorted, in one query. A campaign with none (every type)
+    is missing from the result."""
+    ids = set(campaign_ids)
+    if not ids:
+        return {}
+    stmt = (
+        select(CampaignTicketType.campaign_id, CampaignTicketType.ticket_type_id)
+        .where(CampaignTicketType.campaign_id.in_(ids))
+        .order_by(CampaignTicketType.campaign_id, CampaignTicketType.ticket_type_id)
+    )
+    result: dict[uuid.UUID, list[uuid.UUID]] = {}
+    for campaign_id, type_id in session.execute(stmt):
+        result.setdefault(campaign_id, []).append(type_id)
+    return result
 
 
 def get_campaign(

@@ -533,8 +533,12 @@ def checkout(
     promo = None
     if data.promo_code:
         # After the event lock (taken in _lock_and_validate), so the use count is exact.
-        total = _compute_total(data.items, ticket_types)
-        promo = promotions_service.apply_at_checkout(session, event.id, data.promo_code, total, now)
+        # Priced from the locked ticket types, in the same order as data.items.
+        lines = [
+            promotions_service.Line(tt.id, tt.price_kzt, item.quantity)
+            for item, tt in zip(data.items, ticket_types, strict=True)
+        ]
+        promo = promotions_service.apply_at_checkout(session, event.id, data.promo_code, lines, now)
     order = _build_order(
         user,
         event,

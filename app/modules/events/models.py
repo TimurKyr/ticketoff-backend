@@ -126,6 +126,9 @@ class Event(Base):
     price_from = None
     availability = None
     calendar_links = None
+    # EventOut.organizer (public contact). Not named `organizer`: that is the relationship,
+    # which would lazy-load the profile once per event.
+    organizer_public = None
 
     venue = relationship("Venue")
     organizer = relationship("OrganizerProfile")

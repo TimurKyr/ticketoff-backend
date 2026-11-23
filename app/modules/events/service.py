@@ -312,19 +312,24 @@ def list_organizer_events(
 def annotate_on_sale(
     session: Session, events: Iterable[Event], now: datetime | None = None
 ) -> None:
-    """Set price_from, availability and calendar_links (EventOut) on each event, in one
-    query for all, plus one for the venues the links need.
+    """Set what EventOut adds to the columns on each event, each in one batched query for
+    all of them: price_from and availability, the venues the calendar_links need (BE-31),
+    and the public organizer (BE-29). No query per event.
 
     Same ticket types as the public ticket type list: visible, inside their sales window.
     """
     events = list(events)
+    if not events:
+        return
     stats = repository.on_sale_stats(session, [e.id for e in events], now or _now())
     # Loaded into the session, so event.venue below is an identity-map hit, not a query.
     # Kept in a variable: the identity map holds objects weakly.
     venues = repository.load_venues(session, {e.venue_id for e in events})
+    organizers = repository.public_organizers(session, [e.organizer_id for e in events])
     for event in events:
         row = stats.get(event.id)
         event.price_from = row.min_price_kzt if row else None
         event.availability = availability_of(row.available, row.quantity_total) if row else None
         event.calendar_links = calendar.links_for(event)
+        event.organizer_public = organizers.get(event.organizer_id)
     del venues
