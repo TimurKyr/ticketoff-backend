@@ -37,6 +37,10 @@ def get_event(session: Session, event_id: uuid.UUID) -> Event | None:
     return session.get(Event, event_id)
 
 
+def get_event_by_slug(session: Session, slug: str) -> Event | None:
+    return session.scalar(select(Event).where(Event.slug == slug))
+
+
 def has_orders(session: Session, event_id: uuid.UUID, now: datetime) -> bool:
     """Whether any order holds tickets for the event at `now` (expired checkouts don't)."""
     stmt = (

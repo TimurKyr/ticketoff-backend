@@ -160,6 +160,11 @@ class EventOut(BaseModel):
     organizer_id: uuid.UUID
     venue_id: uuid.UUID
     title: str
+    slug: str | None = Field(
+        description=(
+            "Readable link: GET /events/{slug} works like GET /events/{id}. Null for private events"
+        ),
+    )
     description: str | None
     refund_policy: str | None
     category: str | None
