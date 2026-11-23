@@ -5,14 +5,18 @@ from fastapi import APIRouter, Query, status
 
 from app.modules.checkin import service
 from app.modules.checkin.schemas import (
+    OFFLINE_QR_HOWTO,
     AttendeePage,
     MyEventOut,
+    OfflinePackOut,
     ScanIn,
     ScannedTicket,
     ScanOut,
     StaffIn,
     StaffOut,
     StatsOut,
+    SyncIn,
+    SyncOut,
 )
 from app.modules.identity.dependencies import CurrentUser, SessionDep
 
@@ -87,3 +91,39 @@ def attendees(
 @checkin_router.get("/events/{event_id}/stats", response_model=StatsOut, summary="Door stats")
 def stats(event_id: uuid.UUID, user: CurrentUser, session: SessionDep) -> StatsOut:
     return service.stats(session, user, event_id)
+
+
+@checkin_router.get(
+    "/events/{event_id}/offline-pack",
+    response_model=OfflinePackOut,
+    summary="Download tickets for offline scanning",
+    description=(
+        "For the event owner or assigned staff (404 otherwise): every ticket of the event with "
+        "its status, attendee name and ticket type, plus `generated_at` (server time). Store it "
+        "on the device and scan against it while there is no network; send the scans later "
+        "with `POST /checkin/sync`. Download it again shortly before the doors open.\n\n"
+        + OFFLINE_QR_HOWTO
+    ),
+)
+def offline_pack(event_id: uuid.UUID, user: CurrentUser, session: SessionDep) -> OfflinePackOut:
+    return service.offline_pack(session, user, event_id)
+
+
+@checkin_router.post(
+    "/sync",
+    response_model=SyncOut,
+    summary="Upload check-ins made offline",
+    description=(
+        "Sends the scans a device made offline. Each item is checked in exactly like "
+        "`/scan` (one transaction per item), with `scanned_at` as the check-in time (never "
+        "later than now). One result per item, in the sent order: `checked_in`; "
+        "`already_used` with `checked_in_at`, `checked_in_by` and `checked_in_device_id` of "
+        "the check-in that won (another device or gate); `cancelled` / `refunded` if the "
+        "ticket was cancelled after the pack was downloaded; `invalid`, `wrong_event`, "
+        "`campaign_qr_rejected`, `event_cancelled`. Always 200 for an event the caller may "
+        "scan (404 otherwise). Resending is safe: an item already applied comes back as "
+        "`already_used` with this device's own `checked_in_device_id`.\n\n" + OFFLINE_QR_HOWTO
+    ),
+)
+def sync(payload: SyncIn, user: CurrentUser, session: SessionDep) -> SyncOut:
+    return service.sync(session, user, payload)

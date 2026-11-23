@@ -3,6 +3,7 @@ import uuid
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, joinedload
 
+from app.modules.audit.models import AuditLog
 from app.modules.events.enums import EventStatus
 from app.modules.events.models import Event
 from app.modules.identity.models import OrganizerProfile, StaffAssignment, User
@@ -147,3 +148,28 @@ def search_attendees(
     total = session.scalar(select(func.count()).select_from(stmt.subquery())) or 0
     stmt = stmt.order_by(Attendee.name.asc(), Ticket.id.asc()).limit(limit).offset(offset)
     return [(row[0], row[1], row[2]) for row in session.execute(stmt)], total
+
+
+def offline_pack_rows(session: Session, event_id: uuid.UUID) -> list[tuple[Ticket, str, str]]:
+    """Every ticket of the event with attendee name and ticket type name (BE-32)."""
+    stmt = (
+        _event_tickets(event_id)
+        .join(Attendee, Attendee.id == Ticket.attendee_id)
+        .join(TicketType, TicketType.id == OrderItem.ticket_type_id)
+        .add_columns(Attendee.name, TicketType.name)
+        .order_by(Attendee.name.asc(), Ticket.id.asc())
+    )
+    return [(row[0], row[1], row[2]) for row in session.execute(stmt)]
+
+
+def check_in_info(session: Session, record: CheckInRecord) -> tuple[str | None, str | None]:
+    """(staff email, device id) of a check-in; the device is set only for an offline sync."""
+    email = session.scalar(select(User.email).where(User.id == record.event_admin_id))
+    device_id = session.scalar(
+        select(AuditLog.details["device_id"].astext).where(
+            AuditLog.action_type == "ticket.checked_in",
+            AuditLog.entity_id == record.ticket_id,
+            AuditLog.details["check_in_record_id"].astext == str(record.id),
+        )
+    )
+    return email, device_id

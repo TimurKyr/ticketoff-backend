@@ -756,3 +756,250 @@ def test_stats_of_an_empty_event(client: TestClient, door: Door) -> None:
     stats = client.get(f"/checkin/events/{door.event.id}/stats", headers=door.owner).json()
 
     assert stats == {"registered": 0, "checked_in": 0, "absent": 0, "percent": 0.0}
+
+
+# --- offline pack and sync (BE-32) --------------------------------------------------------------
+
+
+def _pack(client: TestClient, door: Door, headers: Headers | None = None) -> dict:
+    response = client.get(
+        f"/checkin/events/{door.event.id}/offline-pack", headers=headers or door.staff
+    )
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def _item(ticket_id: object, device: str = "phone-a", scanned_at: datetime | None = None) -> dict:
+    when = scanned_at or datetime.now(UTC) - timedelta(minutes=5)
+    return {"ticket_id": str(ticket_id), "scanned_at": when.isoformat(), "device_id": device}
+
+
+def _sync(client: TestClient, door: Door, items: list[dict], headers: Headers | None = None):
+    response = client.post(
+        "/checkin/sync",
+        json={"event_id": str(door.event.id), "items": items},
+        headers=headers or door.staff,
+    )
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def test_offline_pack_lists_every_ticket_without_qr_secrets(
+    client: TestClient, door: Door, db: Session
+) -> None:
+    valid = door.add_ticket("Aigerim")
+    cancelled = door.add_ticket("Bolat", status=TicketStatus.CANCELLED)
+    before = datetime.now(UTC)
+
+    body = _pack(client, door)
+
+    assert body["event_id"] == str(door.event.id)
+    assert body["event_status"] == "published"
+    assert datetime.fromisoformat(body["generated_at"]) >= before - timedelta(seconds=1)
+    assert body["tickets"] == [
+        {"ticket_id": str(valid.id), "status": "valid", "attendee_name": "Aigerim",
+         "ticket_type": "General"},
+        {"ticket_id": str(cancelled.id), "status": "cancelled", "attendee_name": "Bolat",
+         "ticket_type": "General"},
+    ]  # fmt: skip
+    assert (body["checked_in_count"], body["total_count"]) == (0, 1)
+    assert "tk1." not in str(body) and "qr_token" not in str(body)
+    entry = db.scalar(
+        select(AuditLog).where(
+            AuditLog.event_id == door.event.id,
+            AuditLog.action_type == "event.offline_pack_downloaded",
+        )
+    )
+    assert entry is not None and entry.details == {"tickets": 2}
+
+
+def test_offline_pack_is_for_the_owner_and_assigned_staff_only(
+    client: TestClient, door: Door, db: Session
+) -> None:
+    door.add_ticket()
+    assert len(_pack(client, door, door.owner)["tickets"]) == 1
+
+    url = f"/checkin/events/{door.event.id}/offline-pack"
+    assert client.get(url, headers=door.outsider).status_code == 404
+    assert client.get(url).status_code == 401
+    owner_user, _ = _user(db, organizer=True)
+    other_event = _make_event(db, owner_user)
+    response = client.get(f"/checkin/events/{other_event.id}/offline-pack", headers=door.staff)
+    assert response.status_code == 404
+
+
+def test_sync_of_one_ticket_from_two_devices_admits_once(
+    client: TestClient, door: Door, db: Session
+) -> None:
+    ticket = door.add_ticket()
+    first_scan = datetime.now(UTC).replace(microsecond=0) - timedelta(minutes=30)
+
+    first = _sync(client, door, [_item(ticket.id, "phone-a", first_scan)])
+    second = _sync(client, door, [_item(ticket.id, "phone-b")], headers=door.owner)
+
+    assert first["items"][0]["result"] == "checked_in"
+    assert first["items"][0]["ticket"]["status"] == "checked_in"
+    assert (first["checked_in_count"], first["total_count"]) == (1, 1)
+    conflict = second["items"][0]
+    assert conflict["result"] == "already_used"
+    assert conflict["device_id"] == "phone-b"
+    assert conflict["checked_in_by"] == door.staff_user.email
+    assert conflict["checked_in_device_id"] == "phone-a"
+    assert datetime.fromisoformat(conflict["checked_in_at"]) == first_scan
+    records = db.scalars(select(CheckInRecord).where(CheckInRecord.ticket_id == ticket.id)).all()
+    assert len(records) == 1 and records[0].checked_in_at == first_scan
+    entry = db.scalar(
+        select(AuditLog).where(
+            AuditLog.entity_id == ticket.id, AuditLog.action_type == "ticket.checked_in"
+        )
+    )
+    assert entry.details["method"] == "offline"
+    assert entry.details["device_id"] == "phone-a"
+
+
+def test_resending_a_sync_is_safe(client: TestClient, door: Door) -> None:
+    ticket = door.add_ticket()
+    items = [_item(ticket.id, "phone-a")]
+
+    assert _sync(client, door, items)["items"][0]["result"] == "checked_in"
+    again = _sync(client, door, items)
+
+    assert again["items"][0]["result"] == "already_used"
+    assert again["items"][0]["checked_in_device_id"] == "phone-a"
+    assert again["checked_in_count"] == 1
+
+
+def test_ticket_cancelled_after_the_pack_is_refused_at_sync(
+    client: TestClient, door: Door, db: Session
+) -> None:
+    cancelled = door.add_ticket("Aigerim")
+    refunded = door.add_ticket("Bolat")
+    assert {t["status"] for t in _pack(client, door)["tickets"]} == {"valid"}
+    db.get(Ticket, cancelled.id).status = TicketStatus.CANCELLED
+    db.get(Ticket, refunded.id).status = TicketStatus.REFUNDED
+    db.commit()
+
+    body = _sync(client, door, [_item(cancelled.id), _item(refunded.id)])
+
+    assert [i["result"] for i in body["items"]] == ["cancelled", "refunded"]
+    assert body["items"][0]["checked_in_at"] is None
+    db.expire_all()
+    assert db.get(Ticket, cancelled.id).status == TicketStatus.CANCELLED
+    assert db.scalar(select(CheckInRecord).where(CheckInRecord.ticket_id == cancelled.id)) is None
+
+
+def test_sync_answers_in_sent_order_and_the_earliest_scan_wins(
+    client: TestClient, door: Door
+) -> None:
+    ticket = door.add_ticket()
+    early = datetime.now(UTC) - timedelta(hours=1)
+    late = datetime.now(UTC) - timedelta(minutes=1)
+
+    body = _sync(client, door, [_item(ticket.id, "late", late), _item(ticket.id, "early", early)])
+
+    assert [i["result"] for i in body["items"]] == ["already_used", "checked_in"]
+    assert body["items"][0]["checked_in_device_id"] == "early"
+
+
+def test_scan_time_in_the_future_is_recorded_as_now(
+    client: TestClient, door: Door, db: Session
+) -> None:
+    ticket = door.add_ticket()
+    before = datetime.now(UTC)
+
+    body = _sync(client, door, [_item(ticket.id, scanned_at=before + timedelta(days=1))])
+
+    assert body["items"][0]["result"] == "checked_in"
+    checked_in_at = datetime.fromisoformat(body["items"][0]["checked_in_at"])
+    assert before <= checked_in_at <= datetime.now(UTC)
+
+
+def test_sync_rejects_campaign_qr_and_foreign_or_unknown_tickets(
+    client: TestClient, door: Door, db: Session
+) -> None:
+    ticket = door.add_ticket()
+    owner_user, _ = _user(db, organizer=True)
+    foreign = _ticket_factory(db, _make_event(db, owner_user))()
+
+    body = _sync(
+        client,
+        door,
+        [
+            _item("pc1.abcdef"),
+            _item("https://ticketoff.store/e/x?promo=pc1.abcdef"),
+            _item(uuid.uuid4()),
+            _item("not-a-ticket"),
+            _item("{" + str(ticket.id) + "}"),
+            _item(ticket.qr_token[:-2] + "xx"),  # forged signature
+            _item(foreign.id),
+        ],
+    )
+
+    assert [i["result"] for i in body["items"]] == [
+        "campaign_qr_rejected",
+        "campaign_qr_rejected",
+        "invalid",
+        "invalid",
+        "invalid",
+        "invalid",
+        "wrong_event",
+    ]
+    db.expire_all()
+    assert db.get(Ticket, ticket.id).status == TicketStatus.VALID
+    assert db.get(Ticket, foreign.id).status == TicketStatus.VALID
+
+
+def test_sync_accepts_the_whole_ticket_qr(client: TestClient, door: Door) -> None:
+    ticket = door.add_ticket()
+
+    body = _sync(client, door, [_item(ticket.qr_token)])
+
+    assert body["items"][0]["result"] == "checked_in"
+    assert body["items"][0]["ticket_id"] == ticket.qr_token  # echoed as sent
+    assert body["items"][0]["ticket"]["id"] == str(ticket.id)
+
+
+def test_sync_on_a_cancelled_event_admits_nobody(
+    client: TestClient, door: Door, db: Session
+) -> None:
+    ticket = door.add_ticket()
+    _set_status(db, door.event, EventStatus.CANCELLED)
+
+    assert _sync(client, door, [_item(ticket.id)])["items"][0]["result"] == "event_cancelled"
+    db.expire_all()
+    assert db.get(Ticket, ticket.id).status == TicketStatus.VALID
+
+
+def test_sync_access_and_validation(client: TestClient, door: Door) -> None:
+    ticket = door.add_ticket()
+    payload = {"event_id": str(door.event.id), "items": [_item(ticket.id)]}
+
+    assert client.post("/checkin/sync", json=payload, headers=door.outsider).status_code == 404
+    assert client.post("/checkin/sync", json=payload).status_code == 401
+    naive = {**payload, "items": [{**_item(ticket.id), "scanned_at": "2026-11-26T14:05:00"}]}
+    assert client.post("/checkin/sync", json=naive, headers=door.staff).status_code == 422
+    empty = {**payload, "items": []}
+    assert client.post("/checkin/sync", json=empty, headers=door.staff).status_code == 422
+
+
+@postgres_only
+def test_two_devices_syncing_at_once_admit_once(client: TestClient, door: Door) -> None:
+    ticket = door.add_ticket()
+    results: list[str] = []
+    barrier = threading.Barrier(2)
+
+    def sync_once(device: str, headers: Headers) -> None:
+        barrier.wait()
+        body = _sync(client, door, [_item(ticket.id, device)], headers)
+        results.append(body["items"][0]["result"])
+
+    threads = [
+        threading.Thread(target=sync_once, args=("phone-a", door.staff)),
+        threading.Thread(target=sync_once, args=("phone-b", door.owner)),
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert sorted(results) == ["already_used", "checked_in"]
