@@ -13,12 +13,19 @@ Status: open -> in_progress (a handler takes it) -> waiting_customer (the handle
 -> in_progress (the customer replied) -> resolved. A customer reply on a resolved case
 reopens it, so a follow-up does not need a second case.
 
+Attachments (BE-33): a message can carry up to 3 PNG, JPEG or PDF files, 5 MB each, checked
+by their signature (see attachments.py). The bytes go to the attachment storage (storage.py)
+under the attachment's id; the database keeps the metadata. A file can be downloaded by
+whoever can see the case, nobody else (404). If anything fails, the files already written
+are removed, so the storage holds no orphans.
+
 Notifications (BE-18): the customer (the case's opened_by) is told, in the same transaction,
 about a handler's reply (support_reply) and about a status change a handler made
 (support_status). One notification per action: a reply that also flips the status sends only
 the reply. Handlers are never notified, and neither is a customer about their own action.
 """
 
+import logging
 import uuid
 from dataclasses import dataclass
 
@@ -36,8 +43,9 @@ from app.modules.identity.enums import SystemRole
 from app.modules.identity.models import User
 from app.modules.notifications import service as notifications
 from app.modules.ops.enums import SupportKind, SupportStatus
-from app.modules.ops.models import SupportCase, SupportMessage
-from app.modules.support import repository
+from app.modules.ops.models import SupportAttachment, SupportCase, SupportMessage
+from app.modules.support import attachments, repository, storage
+from app.modules.support.attachments import IncomingFile
 from app.modules.support.schemas import (
     CaseCreate,
     CaseDetailOut,
@@ -45,6 +53,17 @@ from app.modules.support.schemas import (
     CasePage,
     MessageOut,
 )
+
+logger = logging.getLogger("app.support")
+
+
+@dataclass(frozen=True, slots=True)
+class Download:
+    """An attachment ready to be sent to the browser."""
+
+    filename: str
+    content_type: str
+    data: bytes
 
 
 @dataclass(frozen=True, slots=True)
@@ -325,23 +344,68 @@ def list_inbox(
 # --- acting on a case -----------------------------------------------------------------------
 
 
-def add_message(session: Session, user: User, case_id: uuid.UUID, body: str) -> MessageOut:
+def add_message(
+    session: Session,
+    user: User,
+    case_id: uuid.UUID,
+    body: str,
+    files: list[IncomingFile] | None = None,
+) -> MessageOut:
     case, _, is_handler = _load(session, _viewer(session, user), case_id, for_update=True)
+    body = body.strip()
+    if not body:
+        raise InvalidInputError("The message text must not be empty")
+    checked = attachments.check_files(files or [])  # nothing is written if any file is bad
+
     message = SupportMessage(case_id=case.id, sender_id=user.id, body=body)
+    for file in checked:
+        message.attachments.append(
+            SupportAttachment(
+                id=uuid.uuid4(),
+                filename=file.filename,
+                content_type=file.content_type,
+                size=len(file.data),
+            )
+        )
     repository.add(session, message)
-    if is_handler:
-        # A reply from the handling side: it takes the case if nobody has, and now waits
-        # for the customer, who gets the reply (not a second email for the status flip).
-        if case.assignee_id is None:
-            _assign(session, user, case)
-        _change_status(session, user, case, SupportStatus.WAITING_CUSTOMER)
-        _notify_customer(session, user, case, message=body)
-    elif case.status in (SupportStatus.WAITING_CUSTOMER, SupportStatus.RESOLVED):
-        # The customer answers (or comes back after the case was resolved).
-        back_to = SupportStatus.IN_PROGRESS if case.assignee_id else SupportStatus.OPEN
-        _change_status(session, user, case, back_to)
-    session.commit()  # the message, any status change and their audit rows together
+    store = storage.get_storage()
+    written: list[str] = []
+    try:
+        for row, file in zip(message.attachments, checked, strict=True):
+            store.save(str(row.id), file.data)
+            written.append(str(row.id))
+        if is_handler:
+            # A reply from the handling side: it takes the case if nobody has, and now waits
+            # for the customer, who gets the reply (not a second email for the status flip).
+            if case.assignee_id is None:
+                _assign(session, user, case)
+            _change_status(session, user, case, SupportStatus.WAITING_CUSTOMER)
+            _notify_customer(session, user, case, message=body)
+        elif case.status in (SupportStatus.WAITING_CUSTOMER, SupportStatus.RESOLVED):
+            # The customer answers (or comes back after the case was resolved).
+            back_to = SupportStatus.IN_PROGRESS if case.assignee_id else SupportStatus.OPEN
+            _change_status(session, user, case, back_to)
+        session.commit()  # the message, its files' rows, any status change and audit together
+    except BaseException:
+        session.rollback()
+        storage.delete_quietly(store, written)
+        raise
     return MessageOut.model_validate(message)
+
+
+def get_attachment(session: Session, user: User, attachment_id: uuid.UUID) -> Download:
+    """The file, for whoever can see its case. Everyone else gets 404, as for the case."""
+    found = repository.get_attachment(session, attachment_id)
+    if found is None:
+        raise NotFoundError("Attachment not found")
+    attachment, case_id = found
+    _load(session, _viewer(session, user), case_id)  # 404 when this user has nothing to do with it
+    try:
+        data = storage.get_storage().read(str(attachment.id))
+    except FileNotFoundError:
+        logger.error("attachment %s is in the database but its file is missing", attachment.id)
+        raise NotFoundError("Attachment not found") from None
+    return Download(attachment.filename, attachment.content_type, data)
 
 
 def assign_to_me(session: Session, user: User, case_id: uuid.UUID) -> CaseDetailOut:

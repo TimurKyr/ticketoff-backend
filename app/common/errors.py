@@ -39,6 +39,10 @@ class InvalidInputError(DomainError):
     """The request is well-formed but refers to data that does not fit (e.g. unknown venue)."""
 
 
+class PayloadTooLargeError(DomainError):
+    """An uploaded file is bigger than allowed (413, BE-33)."""
+
+
 class RateLimitedError(DomainError):
     """The same action was repeated too soon; it may be retried after `retry_after` seconds."""
 

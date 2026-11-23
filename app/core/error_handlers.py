@@ -8,6 +8,7 @@ from app.common.errors import (
     DomainError,
     InvalidInputError,
     NotFoundError,
+    PayloadTooLargeError,
     PermissionDeniedError,
     RateLimitedError,
 )
@@ -18,6 +19,7 @@ STATUS_BY_ERROR: dict[type[DomainError], int] = {
     BusinessRuleError: status.HTTP_409_CONFLICT,
     InvalidInputError: status.HTTP_422_UNPROCESSABLE_CONTENT,
     RateLimitedError: status.HTTP_429_TOO_MANY_REQUESTS,
+    PayloadTooLargeError: 413,  # the constant was renamed between Starlette versions
 }
 
 

@@ -20,6 +20,9 @@ services:
     env_file: .env
     environment:
       DATABASE_URL: postgresql+psycopg://ticketoff:ticketoff@db:5432/ticketoff
+      ATTACHMENTS_DIR: /data/attachments
+    volumes:
+      - attachments:/data/attachments
     ports:
       - "8000:8000"
     depends_on:
@@ -28,3 +31,4 @@ services:
 
 volumes:
   pgdata:
+  attachments:

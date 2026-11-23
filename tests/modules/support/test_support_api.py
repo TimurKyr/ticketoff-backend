@@ -124,7 +124,8 @@ def get_case(api: TestClient, who: Account, case_id: str):
 
 
 def say(api: TestClient, who: Account, case_id: str, body: str = "Hello"):
-    return api.post(f"/support/cases/{case_id}/messages", json={"body": body}, headers=who.headers)
+    # The reply endpoint takes a form (it can carry files, BE-33), not JSON.
+    return api.post(f"/support/cases/{case_id}/messages", data={"body": body}, headers=who.headers)
 
 
 def set_status(api: TestClient, who: Account, case_id: str, status: str):
@@ -419,7 +420,7 @@ def test_a_stranger_cannot_write_in_a_case(
 
     assert say(api, make_account(organizer=True), case["id"]).status_code == 404
     assert say(api, make_account(), case["id"]).status_code == 404
-    unauthenticated = api.post(f"/support/cases/{case['id']}/messages", json={"body": "x"})
+    unauthenticated = api.post(f"/support/cases/{case['id']}/messages", data={"body": "x"})
     assert unauthenticated.status_code == 401
 
 
@@ -980,3 +981,336 @@ def test_a_report_does_not_block_ordinary_cases_about_the_event(
     report(api, buyer, event)
 
     assert attendee_case(api, buyer, event)["kind"] == "attendee"
+
+
+# --- attachments (BE-33) --------------------------------------------------------------------
+
+PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
+JPEG = b"\xff\xd8\xff\xe0" + b"\x00" * 32
+PDF = b"%PDF-1.4\n%%EOF\n"
+EXE = b"MZ\x90\x00" + b"\x00" * 64
+MB = 1024 * 1024
+
+
+def send(
+    api: TestClient,
+    who: Account,
+    case_id: str,
+    files: list[tuple[str, bytes, str]],
+    body: str = "See the attachment",
+):
+    parts = [("files", (name, data, ctype)) for name, data, ctype in files]
+    return api.post(
+        f"/support/cases/{case_id}/messages",
+        data={"body": body},
+        files=parts,
+        headers=who.headers,
+    )
+
+
+def stored(storage) -> list[str]:
+    return sorted(p.name for p in storage.root.iterdir()) if storage.root.exists() else []
+
+
+def test_three_files_are_accepted_and_stored_by_uuid(
+    api: TestClient, buyer: Account, event: Event, attachment_storage
+) -> None:
+    case = attendee_case(api, buyer, event)
+
+    response = send(
+        api,
+        buyer,
+        case["id"],
+        [
+            ("a.png", PNG, "image/png"),
+            ("b.jpg", JPEG, "image/jpeg"),
+            ("c.pdf", PDF, "application/pdf"),
+        ],
+    )
+
+    assert response.status_code == 201, response.text
+    files = response.json()["attachments"]
+    assert [(f["filename"], f["content_type"]) for f in files] == [
+        ("a.png", "image/png"),
+        ("b.jpg", "image/jpeg"),
+        ("c.pdf", "application/pdf"),
+    ]
+    assert [f["size"] for f in files] == [len(PNG), len(JPEG), len(PDF)]
+    assert all(f["url"] == f"/support/attachments/{f['id']}" for f in files)
+    assert stored(attachment_storage) == sorted(f["id"] for f in files)  # named by uuid only
+    messages = get_case(api, buyer, case["id"]).json()["messages"]  # not ordered, see top
+    [shown] = [m["attachments"] for m in messages if m["attachments"]]
+    assert sorted(f["id"] for f in shown) == sorted(f["id"] for f in files)
+
+
+def test_the_file_downloads_as_an_attachment(api: TestClient, buyer: Account, event: Event) -> None:
+    case = attendee_case(api, buyer, event)
+    [file] = send(api, buyer, case["id"], [("scan.pdf", PDF, "application/pdf")]).json()[
+        "attachments"
+    ]
+
+    response = api.get(file["url"], headers=buyer.headers)
+
+    assert response.status_code == 200
+    assert response.content == PDF
+    assert response.headers["content-type"] == "application/pdf"
+    assert response.headers["content-disposition"].startswith("attachment;")
+    assert 'filename="scan.pdf"' in response.headers["content-disposition"]
+    assert response.headers["x-content-type-options"] == "nosniff"
+    assert response.headers["cache-control"] == "private, no-store"
+
+
+def test_who_may_download(
+    api: TestClient,
+    make_account: Callable[..., Account],
+    buyer: Account,
+    organizer: Account,
+    admin: Account,
+    event: Event,
+) -> None:
+    case = attendee_case(api, buyer, event)
+    [file] = send(api, buyer, case["id"], [("a.png", PNG, "image/png")]).json()["attachments"]
+
+    for allowed in (buyer, organizer, admin):
+        assert api.get(file["url"], headers=allowed.headers).status_code == 200
+    stranger = make_account()
+    other_organizer = make_account(organizer=True)
+    for denied in (stranger, other_organizer):
+        assert api.get(file["url"], headers=denied.headers).status_code == 404
+    assert api.get(file["url"]).status_code == 401
+    assert api.get(f"/support/attachments/{uuid.uuid4()}", headers=buyer.headers).status_code == 404
+
+
+def test_the_organizer_cannot_download_a_files_of_a_report(
+    api: TestClient, buyer: Account, organizer: Account, admin: Account, event: Event
+) -> None:
+    case = report(api, buyer, event).json()
+    [file] = send(api, buyer, case["id"], [("proof.png", PNG, "image/png")]).json()["attachments"]
+
+    assert api.get(file["url"], headers=organizer.headers).status_code == 404
+    assert api.get(file["url"], headers=admin.headers).status_code == 200
+
+
+def test_the_handler_can_attach_a_file_too(
+    api: TestClient, buyer: Account, organizer: Account, event: Event
+) -> None:
+    case = attendee_case(api, buyer, event)
+
+    response = send(api, organizer, case["id"], [("guide.pdf", PDF, "application/pdf")])
+
+    assert response.status_code == 201, response.text
+    [file] = response.json()["attachments"]
+    assert api.get(file["url"], headers=buyer.headers).content == PDF
+
+
+def test_four_files_are_refused_and_nothing_is_saved(
+    api: TestClient, buyer: Account, event: Event, attachment_storage
+) -> None:
+    case = attendee_case(api, buyer, event)
+
+    response = send(api, buyer, case["id"], [(f"{i}.png", PNG, "image/png") for i in range(4)])
+
+    assert response.status_code == 422
+    assert stored(attachment_storage) == []
+    assert len(get_case(api, buyer, case["id"]).json()["messages"]) == 1
+
+
+def test_a_big_file_is_413_and_exactly_5_mb_is_fine(
+    api: TestClient, buyer: Account, event: Event, attachment_storage
+) -> None:
+    case = attendee_case(api, buyer, event)
+    limit = PNG + b"\x00" * (5 * MB - len(PNG))
+
+    too_big = send(api, buyer, case["id"], [("big.png", limit + b"\x00", "image/png")])
+    assert too_big.status_code == 413
+    assert stored(attachment_storage) == []
+
+    assert send(api, buyer, case["id"], [("big.png", limit, "image/png")]).status_code == 201
+
+
+def test_an_exe_named_png_is_422(
+    api: TestClient, buyer: Account, event: Event, attachment_storage
+) -> None:
+    case = attendee_case(api, buyer, event)
+
+    response = send(api, buyer, case["id"], [("virus.png", EXE, "image/png")])
+
+    assert response.status_code == 422
+    assert stored(attachment_storage) == []
+
+
+@pytest.mark.parametrize(
+    ("name", "data", "ctype"),
+    [
+        ("a.txt", b"hello", "text/plain"),
+        ("a.gif", b"GIF89a" + b"\x00" * 16, "image/gif"),
+        ("a.svg", b"<svg xmlns='http://www.w3.org/2000/svg'/>", "image/svg+xml"),
+        ("a.html", b"<script>alert(1)</script>", "text/html"),
+        ("empty.png", b"", "image/png"),
+    ],
+)
+def test_other_types_and_empty_files_are_422(
+    api: TestClient, buyer: Account, event: Event, name: str, data: bytes, ctype: str
+) -> None:
+    case = attendee_case(api, buyer, event)
+
+    assert send(api, buyer, case["id"], [(name, data, ctype)]).status_code == 422
+
+
+def test_the_type_comes_from_the_content_not_from_the_client(
+    api: TestClient, buyer: Account, event: Event
+) -> None:
+    case = attendee_case(api, buyer, event)
+
+    [file] = send(api, buyer, case["id"], [("scan.png", PDF, "image/png")]).json()["attachments"]
+
+    assert file["content_type"] == "application/pdf"
+
+
+def test_one_bad_file_refuses_the_whole_message(
+    api: TestClient, buyer: Account, event: Event, db_session: Session, attachment_storage
+) -> None:
+    case = attendee_case(api, buyer, event)
+
+    response = send(
+        api, buyer, case["id"], [("ok.png", PNG, "image/png"), ("bad.png", EXE, "image/png")]
+    )
+
+    assert response.status_code == 422
+    assert stored(attachment_storage) == []
+    assert len(get_case(api, buyer, case["id"]).json()["messages"]) == 1
+    assert db_session.scalar(text("select count(*) from support_attachments")) == 0
+
+
+def test_the_filename_is_cleaned_and_a_unicode_name_downloads(
+    api: TestClient, buyer: Account, event: Event
+) -> None:
+    case = attendee_case(api, buyer, event)
+
+    [dirty, unicode_name] = send(
+        api,
+        buyer,
+        case["id"],
+        [("../../etc/passwd.png", PNG, "image/png"), ("чек за билет.pdf", PDF, "application/pdf")],
+    ).json()["attachments"]
+
+    assert dirty["filename"] == "passwd.png"
+    header = api.get(unicode_name["url"], headers=buyer.headers).headers["content-disposition"]
+    assert "filename*=UTF-8''" in header and header.isascii()
+
+
+def test_a_message_without_files_still_works(api: TestClient, buyer: Account, event: Event) -> None:
+    case = attendee_case(api, buyer, event)
+
+    urlencoded = say(api, buyer, case["id"], "plain form")
+    multipart = api.post(
+        f"/support/cases/{case['id']}/messages",
+        data={"body": "multipart"},
+        files={"unused": ("x", b"")},  # forces multipart/form-data without a "files" part
+        headers=buyer.headers,
+    )
+
+    assert urlencoded.status_code == multipart.status_code == 201
+    assert urlencoded.json()["attachments"] == multipart.json()["attachments"] == []
+
+
+def test_the_text_is_still_required(api: TestClient, buyer: Account, event: Event) -> None:
+    case = attendee_case(api, buyer, event)
+
+    for body in ("", "   ", "x" * 5001):
+        assert say(api, buyer, case["id"], body).status_code == 422
+    assert send(api, buyer, case["id"], [("a.png", PNG, "image/png")], body="  ").status_code == 422
+
+
+def test_an_empty_nameless_file_part_is_ignored(
+    api: TestClient, buyer: Account, event: Event
+) -> None:
+    case = attendee_case(api, buyer, event)
+    # What a browser sends when no file was chosen: a part with filename="" and no bytes.
+    # (Written by hand: the test client leaves an empty filename out.)
+    raw = (
+        b'--B\r\nContent-Disposition: form-data; name="body"\r\n\r\nno file chosen\r\n'
+        b'--B\r\nContent-Disposition: form-data; name="files"; filename=""\r\n'
+        b"Content-Type: application/octet-stream\r\n\r\n\r\n--B--\r\n"
+    )
+
+    response = api.post(
+        f"/support/cases/{case['id']}/messages",
+        content=raw,
+        headers=buyer.headers | {"Content-Type": "multipart/form-data; boundary=B"},
+    )
+
+    assert response.status_code == 201, response.text
+    assert response.json()["attachments"] == []
+
+
+def test_a_failing_disk_leaves_no_message_and_no_files(
+    api: TestClient, buyer: Account, event: Event, attachment_storage, monkeypatch
+) -> None:
+    case = attendee_case(api, buyer, event)
+    real_save = attachment_storage.save
+    calls: list[str] = []
+
+    def flaky(key: str, data: bytes) -> None:
+        calls.append(key)
+        if len(calls) == 2:
+            raise OSError("disk full")
+        real_save(key, data)
+
+    monkeypatch.setattr(attachment_storage, "save", flaky)
+
+    failing_client = TestClient(app, raise_server_exceptions=False)
+    response = failing_client.post(
+        f"/support/cases/{case['id']}/messages",
+        data={"body": "two files"},
+        files=[("files", ("a.png", PNG, "image/png")), ("files", ("b.png", PNG, "image/png"))],
+        headers=buyer.headers,
+    )
+
+    assert response.status_code == 500
+    assert stored(attachment_storage) == []  # the first file was removed again
+    assert len(get_case(api, buyer, case["id"]).json()["messages"]) == 1
+
+
+def test_a_handler_reply_with_a_file_notifies_once(
+    api: TestClient,
+    buyer: Account,
+    organizer: Account,
+    event: Event,
+    emails: RecordingEmailProvider,
+) -> None:
+    case = attendee_case(api, buyer, event)
+    before = len(emails.to(buyer.user.email))
+
+    send(api, organizer, case["id"], [("a.png", PNG, "image/png")], body="Here you go")
+
+    assert len(emails.to(buyer.user.email)) == before + 1  # no attachment inside the email
+
+
+def test_a_missing_file_on_disk_is_404(
+    api: TestClient, buyer: Account, event: Event, attachment_storage
+) -> None:
+    case = attendee_case(api, buyer, event)
+    [file] = send(api, buyer, case["id"], [("a.png", PNG, "image/png")]).json()["attachments"]
+    (attachment_storage.root / file["id"]).unlink()
+
+    assert api.get(file["url"], headers=buyer.headers).status_code == 404
+
+
+def test_the_database_refuses_a_bad_type_or_size(
+    api: TestClient, buyer: Account, event: Event, db_session: Session
+) -> None:
+    from sqlalchemy.exc import IntegrityError
+
+    case = attendee_case(api, buyer, event)
+    message_id = case["messages"][0]["id"]
+
+    for content_type, size in (("image/gif", 10), ("image/png", 0), ("image/png", 5 * MB + 1)):
+        with pytest.raises(IntegrityError), db_session.begin_nested():
+            db_session.execute(
+                text(
+                    "insert into support_attachments (id, message_id, filename, content_type, size)"
+                    " values (:id, :m, 'x', :t, :s)"
+                ),
+                {"id": uuid.uuid4(), "m": message_id, "t": content_type, "s": size},
+            )

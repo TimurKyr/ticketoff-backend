@@ -1,6 +1,19 @@
 import uuid
 
-from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Index, Text, false, func, text
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    Column,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    false,
+    func,
+    text,
+)
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import relationship
 
@@ -106,3 +119,37 @@ class SupportMessage(Base):
 
     case = relationship("SupportCase", back_populates="messages")
     sender = relationship("User")
+    attachments = relationship(
+        "SupportAttachment",
+        back_populates="message",
+        order_by="SupportAttachment.created_at, SupportAttachment.id",
+    )
+
+
+class SupportAttachment(Base):
+    """A file sent with a support message (BE-33, a bonus table). The bytes are not here:
+    they are in the attachment storage under this row's id; the database keeps what the
+    list and the download need."""
+
+    __tablename__ = "support_attachments"
+    __table_args__ = (
+        CheckConstraint(
+            "content_type IN ('image/png', 'image/jpeg', 'application/pdf')",
+            name="content_type_allowed",
+        ),
+        # Same limit as the upload check (5 MB).
+        CheckConstraint("size > 0 AND size <= 5242880", name="size_within_limit"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    message_id = Column(
+        UUID(as_uuid=True), ForeignKey("support_messages.id"), nullable=False, index=True
+    )
+    # The name shown to people, cleaned on upload. Never used as a path.
+    filename = Column(String(255), nullable=False)
+    # Detected from the file's signature, not taken from the client.
+    content_type = Column(String(50), nullable=False)
+    size = Column(Integer, nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    message = relationship("SupportMessage", back_populates="attachments")

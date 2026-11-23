@@ -18,7 +18,11 @@ COPY alembic.ini ./
 COPY migrations ./migrations
 COPY app ./app
 
-RUN useradd --create-home --uid 1000 appuser && chown -R appuser /app
+# /data/attachments is the mount point of the attachments volume (BE-33). It is created here,
+# owned by appuser, because a new named volume copies the owner of the folder it covers.
+RUN useradd --create-home --uid 1000 appuser \
+    && mkdir -p /data/attachments \
+    && chown -R appuser /app /data
 USER appuser
 
 EXPOSE 8000
