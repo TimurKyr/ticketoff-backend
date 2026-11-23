@@ -8,7 +8,12 @@ from app.common.pagination import Limit, Offset
 from app.modules.identity.dependencies import CurrentUser, SessionDep
 from app.modules.ops.enums import SupportKind, SupportStatus
 from app.modules.support import service
-from app.modules.support.attachments import MAX_BYTES, IncomingFile, content_disposition
+from app.modules.support.attachments import (
+    MAX_BYTES,
+    MAX_FILES,
+    IncomingFile,
+    content_disposition,
+)
 from app.modules.support.schemas import (
     CaseCreate,
     CaseDetailOut,
@@ -81,17 +86,24 @@ def add_message(
     More than 3 files, a file that is not really a PNG, JPEG or PDF, or an empty one: 422.
     A file over 5 MB: 413. One bad file refuses the whole message.
     """
-    incoming = []
-    for upload in files or []:
-        if isinstance(upload, str):
+    # Count first, read after: a request with hundreds of parts must be refused before any
+    # of them is read into memory. A browser sends an empty part when no file was chosen,
+    # and that one does not count.
+    uploads: list[UploadFile] = []
+    for part in files or []:
+        if isinstance(part, str):
             # An empty file input arrives as a plain empty field; anything else is not a file.
-            if upload:
+            if part:
                 raise InvalidInputError("files must be files")
-            continue
-        data = upload.file.read(MAX_BYTES + 1)  # one byte over the limit is enough to refuse
-        if not data and not upload.filename:
-            continue  # a browser sends an empty part when no file was chosen
-        incoming.append(IncomingFile(upload.filename, data))
+        elif part.filename or part.size:
+            uploads.append(part)
+    if len(uploads) > MAX_FILES:
+        raise InvalidInputError(f"At most {MAX_FILES} files per message")
+    incoming = [
+        # One byte over the limit is enough to refuse a file.
+        IncomingFile(upload.filename, upload.file.read(MAX_BYTES + 1))
+        for upload in uploads
+    ]
     return service.add_message(session, user, case_id, body, incoming)
 
 

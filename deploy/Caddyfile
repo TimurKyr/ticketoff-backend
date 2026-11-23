@@ -2,6 +2,11 @@
 # The DNS records must point to this server, ports 80 and 443 open.
 {$API_DOMAIN} {
 	encode zstd gzip
+	# The API parses a whole upload before it checks who sent it, so refuse big bodies here:
+	# 3 files of 5 MB (BE-33) plus the form fields. Everything else in the API is small.
+	request_body {
+		max_size 20MB
+	}
 	reverse_proxy api:8000
 }
 

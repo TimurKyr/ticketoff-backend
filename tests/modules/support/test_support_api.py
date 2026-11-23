@@ -1171,6 +1171,7 @@ def test_one_bad_file_refuses_the_whole_message(
     api: TestClient, buyer: Account, event: Event, db_session: Session, attachment_storage
 ) -> None:
     case = attendee_case(api, buyer, event)
+    rows_before = db_session.scalar(text("select count(*) from support_attachments"))
 
     response = send(
         api, buyer, case["id"], [("ok.png", PNG, "image/png"), ("bad.png", EXE, "image/png")]
@@ -1179,7 +1180,7 @@ def test_one_bad_file_refuses_the_whole_message(
     assert response.status_code == 422
     assert stored(attachment_storage) == []
     assert len(get_case(api, buyer, case["id"]).json()["messages"]) == 1
-    assert db_session.scalar(text("select count(*) from support_attachments")) == 0
+    assert db_session.scalar(text("select count(*) from support_attachments")) == rows_before
 
 
 def test_the_filename_is_cleaned_and_a_unicode_name_downloads(
@@ -1314,3 +1315,21 @@ def test_the_database_refuses_a_bad_type_or_size(
                 ),
                 {"id": uuid.uuid4(), "m": message_id, "t": content_type, "s": size},
             )
+
+
+def test_too_many_parts_are_refused_before_any_file_is_read(
+    api: TestClient, buyer: Account, event: Event, monkeypatch
+) -> None:
+    from app.modules.support import router as support_router
+
+    def must_not_read(*args, **kwargs):
+        raise AssertionError("a file was read although there were too many")
+
+    monkeypatch.setattr(support_router, "IncomingFile", must_not_read)
+    case = attendee_case(api, buyer, event)
+    big = PNG + b"\x00" * (6 * MB)  # each would be 413 on its own: the count must come first
+
+    response = send(api, buyer, case["id"], [(f"{i}.png", big, "image/png") for i in range(4)])
+
+    assert response.status_code == 422
+    assert "At most 3 files" in response.text
