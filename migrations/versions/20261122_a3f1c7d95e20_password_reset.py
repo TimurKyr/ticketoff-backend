@@ -4,7 +4,7 @@ notificationtype: password_reset.
 users.password_reset_sent_at: when the last reset email was queued (the per-user cooldown).
 
 Revision ID: a3f1c7d95e20
-Revises: c4a1e7d93b20
+Revises: 07114fa1013f
 Create Date: 2026-11-22 12:00:00.000000
 
 """
@@ -16,7 +16,7 @@ import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
 revision: str = 'a3f1c7d95e20'
-down_revision: str | None = 'c4a1e7d93b20'
+down_revision: str | None = '07114fa1013f'
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
