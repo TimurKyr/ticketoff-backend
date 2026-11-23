@@ -122,13 +122,13 @@ def find_code_by_qr(
     return (row[0], row[1]) if row else None
 
 
-def _holding_redemptions(now: datetime):
+def _holding_redemptions(session: Session, now: datetime):
     """Redemptions on orders that still count: paid, free, or pending and not yet expired.
 
     A cancelled or refunded order, and an abandoned checkout past its hold, give the use back
     on their own, the same way tickets are released, so no cleanup job is needed.
     """
-    return orders_repository.holding_orders_clause(now, orders_repository.checkout_hold())
+    return orders_repository.holding_orders_clause(now, orders_repository.checkout_hold(session))
 
 
 def campaign_redemptions(session: Session, campaign_id: uuid.UUID, now: datetime) -> int:
@@ -137,7 +137,7 @@ def campaign_redemptions(session: Session, campaign_id: uuid.UUID, now: datetime
         .select_from(PromoRedemption)
         .join(PromoCode, PromoCode.id == PromoRedemption.promo_code_id)
         .join(Order, Order.id == PromoRedemption.order_id)
-        .where(PromoCode.campaign_id == campaign_id, _holding_redemptions(now))
+        .where(PromoCode.campaign_id == campaign_id, _holding_redemptions(session, now))
     )
     return session.scalar(stmt) or 0
 
@@ -150,7 +150,7 @@ def code_redemptions(
         select(PromoRedemption.promo_code_id, func.count())
         .join(PromoCode, PromoCode.id == PromoRedemption.promo_code_id)
         .join(Order, Order.id == PromoRedemption.order_id)
-        .where(PromoCode.campaign_id == campaign_id, _holding_redemptions(now))
+        .where(PromoCode.campaign_id == campaign_id, _holding_redemptions(session, now))
         .group_by(PromoRedemption.promo_code_id)
     )
     return {code_id: count for code_id, count in session.execute(stmt)}

@@ -15,7 +15,7 @@ from datetime import UTC, datetime
 from sqlalchemy.orm import Session
 
 from app.common.errors import BusinessRuleError, NotFoundError
-from app.core.config import get_settings
+from app.modules.admin.platform_settings import get_platform_settings
 from app.modules.audit import service as audit
 from app.modules.events import service as events_service
 from app.modules.events.enums import EventStatus
@@ -54,7 +54,7 @@ def _checklist(session: Session, event: Event) -> ActivationChecklistOut:
         activation_fee_paid=repository.get_succeeded_activation(session, event.id) is not None,
         terms_accepted=event.paid_terms_accepted_at is not None,
         active=event.paid_sales_active,
-        activation_fee_kzt=get_settings().activation_fee_kzt,
+        activation_fee_kzt=get_platform_settings(session).activation_fee_kzt,
     )
 
 
@@ -142,7 +142,7 @@ def pay_activation(session: Session, event: Event, user: User) -> ActivationChec
         payment = Payment(
             purpose=PaymentPurpose.ACTIVATION,
             event_id=event.id,
-            amount_kzt=get_settings().activation_fee_kzt,
+            amount_kzt=get_platform_settings(session).activation_fee_kzt,
             status=PaymentStatus.SUCCEEDED,
             is_simulated=True,
         )
@@ -204,7 +204,7 @@ def pay_order(
     if order.status != OrderStatus.PENDING:
         raise BusinessRuleError("Order cannot be paid")
     # created_at is the DB's now() (start of the checkout transaction); `now` is the app clock.
-    if now >= order.created_at + orders_repository.checkout_hold():
+    if now >= order.created_at + orders_repository.checkout_hold(session):
         order.status = OrderStatus.CANCELLED
         session.commit()  # keep the cancellation, then report it
         raise BusinessRuleError("Checkout expired, start again")
@@ -427,7 +427,7 @@ def fee_for(gross: int, percent: int) -> int:
 
 def get_summary(session: Session, event: Event) -> PaymentSummaryOut:
     gross, refunds = repository.summary_totals(session, event.id)
-    percent = get_settings().processing_fee_percent
+    percent = get_platform_settings(session).processing_fee_percent
     fees = fee_for(gross, percent)
     return PaymentSummaryOut(
         gross_kzt=gross,

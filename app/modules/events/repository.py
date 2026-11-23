@@ -41,7 +41,7 @@ def has_orders(session: Session, event_id: uuid.UUID, now: datetime) -> bool:
     """Whether any order holds tickets for the event at `now` (expired checkouts don't)."""
     stmt = (
         select(Order.id)
-        .where(Order.event_id == event_id, holding_orders_clause(now, checkout_hold()))
+        .where(Order.event_id == event_id, holding_orders_clause(now, checkout_hold(session)))
         .limit(1)
     )
     return session.scalar(stmt) is not None
@@ -179,7 +179,7 @@ def on_sale_stats(
     held = (
         select(OrderItem.ticket_type_id, func.sum(OrderItem.quantity).label("held"))
         .join(Order, Order.id == OrderItem.order_id)
-        .where(Order.event_id.in_(ids), holding_orders_clause(now, checkout_hold()))
+        .where(Order.event_id.in_(ids), holding_orders_clause(now, checkout_hold(session)))
         .group_by(OrderItem.ticket_type_id)
         .subquery()
     )

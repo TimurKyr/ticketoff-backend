@@ -338,7 +338,7 @@ def test_expired_checkout_pay_sends_nothing(
 ) -> None:
     user = buyer(db_session)
     pending = checkout(db_session, user, paid_type, 1)
-    expired = orders_repository.checkout_hold() + timedelta(minutes=1)
+    expired = orders_repository.checkout_hold(db_session) + timedelta(minutes=1)
     db_session.get_one(Order, pending.id).created_at = datetime.now(UTC) - expired
     db_session.flush()
 

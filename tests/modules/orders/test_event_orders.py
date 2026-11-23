@@ -313,7 +313,9 @@ def test_hold_expired_marks_an_abandoned_checkout_but_keeps_its_status(
 ) -> None:
     fresh = checkout(db_session, create_user(db_session), paid_type, [("Fresh", None)])
     old = checkout(db_session, create_user(db_session), paid_type, [("Old", None)])
-    long_ago = datetime.now(UTC) - orders_repository.checkout_hold() - timedelta(minutes=1)
+    long_ago = (
+        datetime.now(UTC) - orders_repository.checkout_hold(db_session) - timedelta(minutes=1)
+    )
     db_session.execute(update(Order).where(Order.id == old.id).values(created_at=long_ago))
     db_session.expire_all()
 

@@ -75,7 +75,7 @@ def stock(session: Session, event: Event, now: datetime) -> Stocked:
     add_tickets(session, paid_with_returns, TicketStatus.REFUNDED, TicketStatus.CANCELLED)
 
     create_order_item(session, standard, 4, OrderStatus.PENDING)  # fresh: reserved
-    expired = now - repository.checkout_hold() - timedelta(minutes=1)
+    expired = now - repository.checkout_hold(session) - timedelta(minutes=1)
     create_order_item(session, standard, 5, OrderStatus.PENDING, created_at=expired)
     create_order_item(session, standard, 6, OrderStatus.CANCELLED)
     create_order_item(session, standard, 7, OrderStatus.REFUNDED)
@@ -154,7 +154,7 @@ def test_reservation_expires_with_the_hold(db_session: Session, event: Event) ->
     standard = create_ticket_type(db_session, event, quantity_total=10)
     item = create_order_item(db_session, standard, 4, OrderStatus.PENDING)
     created_at = db_session.get(OrderItem, item.id).order.created_at
-    hold = repository.checkout_hold()
+    hold = repository.checkout_hold(db_session)
 
     inside = service.get_inventory(db_session, event, now=created_at + hold - timedelta(seconds=1))
     after = service.get_inventory(db_session, event, now=created_at + hold)

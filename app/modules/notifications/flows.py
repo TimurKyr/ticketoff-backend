@@ -81,7 +81,7 @@ def payment_failed(session: Session, order: Order, payment: Payment) -> None:
     context = {
         **_event_context(order.event),
         "amount_kzt": payment.amount_kzt,
-        "retry_until": order.created_at + checkout_hold(),
+        "retry_until": order.created_at + checkout_hold(session),
         "order_url": links.order_url(order.id),
     }
     notify(

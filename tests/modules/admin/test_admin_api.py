@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.config import get_settings
 from app.core.db import get_session
 from app.main import app
 from app.modules.audit.models import AuditLog
@@ -133,6 +134,12 @@ ADMIN_ROUTES = [
     ("get", "/admin/refunds"),
     ("get", "/admin/activations"),
     ("get", "/admin/settings"),
+    ("patch", "/admin/settings"),
+    ("get", "/admin/search?q=a&type=order"),
+    ("get", "/admin/reports/payments.csv"),
+    ("get", "/admin/reports/refunds.csv"),
+    ("get", "/admin/reports/orders.csv"),
+    ("get", "/admin/promo-activity"),
 ]
 
 
@@ -353,7 +360,7 @@ def test_search_events_by_title(
     assert body["items"][0]["status"] == "published"
 
 
-@pytest.mark.parametrize("query", ["q=a", "type=user", "q=&type=user", "q=a&type=order"])
+@pytest.mark.parametrize("query", ["q=a", "type=user", "q=&type=user", "q=a&type=ticket"])
 def test_search_bad_params_are_422(api: TestClient, admin: Headers, query: str) -> None:
     assert api.get(f"/admin/search?{query}", headers=admin).status_code == 422
 
@@ -420,10 +427,15 @@ def test_refunds_list_has_order_and_event(
     assert item["reason"] == "dup"
 
 
-def test_settings_are_read_only_config(api: TestClient, admin: Headers) -> None:
+def test_settings_default_to_env_and_are_editable(api: TestClient, admin: Headers) -> None:
     body = api.get("/admin/settings", headers=admin).json()
-    assert body["activation_fee_kzt"] >= 1
-    assert 0 <= body["processing_fee_percent"] <= 100
-    assert body["currency"] == "KZT"
-    assert body["read_only"] is True
+    env = get_settings()
+    assert body == {
+        "activation_fee_kzt": env.activation_fee_kzt,
+        "processing_fee_percent": env.processing_fee_percent,
+        "checkout_hold_minutes": env.checkout_hold_minutes,
+        "currency": "KZT",
+        "read_only": False,
+        "updated_at": None,
+    }
     assert api.put("/admin/settings", json={}, headers=admin).status_code == 405

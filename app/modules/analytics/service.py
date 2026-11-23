@@ -10,7 +10,7 @@ from datetime import UTC, datetime
 
 from sqlalchemy.orm import Session
 
-from app.core.config import get_settings
+from app.modules.admin.platform_settings import get_platform_settings
 from app.modules.analytics import repository
 from app.modules.analytics.schemas import (
     CampaignStatsOut,
@@ -68,7 +68,7 @@ def _event_stats(session: Session, events: Iterable[Event]) -> list[EventStatsOu
     scanned = repository.checked_in(session, ids)
     discounts = repository.discounts_kzt(session, ids)
     inventory = repository.tickets_available_in_total(session, ids)
-    percent = get_settings().processing_fee_percent
+    percent = get_platform_settings(session).processing_fee_percent
     rows = []
     for event in events:
         orders, tickets = sold.get(event.id, (0, 0))
@@ -131,7 +131,7 @@ def get_overview(session: Session, organizer: OrganizerProfile) -> OverviewOut:
             total=len(events), draft=repository.draft_count(session, organizer.id), **counts
         ),
         totals=_sum(_event_stats(session, events)),
-        fee_percent=get_settings().processing_fee_percent,
+        fee_percent=get_platform_settings(session).processing_fee_percent,
     )
 
 
@@ -152,7 +152,7 @@ def list_history(
         total=total,
         limit=limit,
         offset=offset,
-        fee_percent=get_settings().processing_fee_percent,
+        fee_percent=get_platform_settings(session).processing_fee_percent,
     )
 
 
@@ -193,7 +193,7 @@ def get_event_analytics(session: Session, event: Event) -> EventAnalyticsOut:
             for day, orders, tickets, sales in repository.daily_sales(session, event.id)
         ],
         timezone=_venue_timezone(session, event),
-        fee_percent=get_settings().processing_fee_percent,
+        fee_percent=get_platform_settings(session).processing_fee_percent,
     )
 
 

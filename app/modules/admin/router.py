@@ -1,10 +1,11 @@
-"""Platform admin endpoints (BE-22). Every route needs system_role = platform_admin:
+"""Platform admin endpoints (BE-22, BE-26). Every route needs system_role = platform_admin:
 no token → 401, any other user → 403."""
 
 import uuid
+from datetime import date
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Response
 
 from app.common.pagination import Limit, Offset
 from app.modules.admin import service
@@ -12,6 +13,8 @@ from app.modules.admin.schemas import (
     AdminUserOut,
     PaymentPage,
     PlatformSettingsOut,
+    PlatformSettingsUpdate,
+    PromoActivityPage,
     RefundPage,
     SearchPage,
     SearchType,
@@ -69,11 +72,20 @@ def unsuspend_user(user_id: uuid.UUID, admin: AdminDep, session: SessionDep) -> 
     return service.set_user_suspended(session, admin, user_id, False)
 
 
-@admin_router.get("/search", response_model=SearchPage, summary="Find users or events")
+@admin_router.get("/search", response_model=SearchPage, summary="Find users, events or orders")
 def search(
     session: SessionDep,
-    q: Annotated[str, Query(min_length=1, max_length=100, description="Part of email or title")],
-    type: Annotated[SearchType, Query(description="user (by email) or event (by title)")],
+    q: Annotated[
+        str,
+        Query(min_length=1, max_length=100, description="Part of email or title, or an order id"),
+    ],
+    type: Annotated[
+        SearchType,
+        Query(
+            description="user (by email), event (by title) or order (by order id, buyer's "
+            "email or a guest's email)"
+        ),
+    ],
     limit: Limit = 20,
     offset: Offset = 0,
 ) -> SearchPage:
@@ -117,8 +129,59 @@ def list_activations(
     )
 
 
+@admin_router.get("/settings", response_model=PlatformSettingsOut, summary="Platform fees")
+def read_settings(session: SessionDep) -> PlatformSettingsOut:
+    return service.get_settings_out(session)
+
+
+@admin_router.patch("/settings", response_model=PlatformSettingsOut, summary="Change platform fees")
+def update_settings(
+    data: PlatformSettingsUpdate, admin: AdminDep, session: SessionDep
+) -> PlatformSettingsOut:
+    """Applies from the next request on: new activations pay the new fee (paid ones keep
+    theirs), new checkouts hold for the new time. Audited as admin.settings_updated."""
+    return service.update_settings(session, admin, data)
+
+
+ReportDate = Annotated[
+    date | None, Query(description="Day in Kazakhstan time (Asia/Almaty), inclusive")
+]
+
+
 @admin_router.get(
-    "/settings", response_model=PlatformSettingsOut, summary="Platform fees (read-only)"
+    "/reports/{kind}.csv",
+    response_class=Response,
+    summary="Download payments, refunds or orders as CSV",
+    responses={200: {"content": {"text/csv": {}}, "description": "UTF-8 CSV with a BOM"}},
 )
-def read_settings() -> PlatformSettingsOut:
-    return service.get_settings_out()
+def download_report(
+    kind: service.ReportKind,
+    session: SessionDep,
+    from_date: ReportDate = None,
+    to_date: ReportDate = None,
+) -> Response:
+    """One row per record created in the period (oldest first); no dates = everything.
+    Timestamps are UTC. Every row has is_simulated: all money on the platform is simulated."""
+    filename, body = service.build_report(session, kind, from_date, to_date)
+    return Response(
+        content=body,
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@admin_router.get(
+    "/promo-activity",
+    response_model=PromoActivityPage,
+    summary="Promo code use per campaign, biggest discount first",
+)
+def promo_activity(
+    session: SessionDep,
+    from_date: ReportDate = None,
+    to_date: ReportDate = None,
+    limit: Limit = 20,
+    offset: Offset = 0,
+) -> PromoActivityPage:
+    """Campaigns with at least one redemption in the period, counted on paid or free
+    orders only (as in the organizer's analytics)."""
+    return service.promo_activity(session, from_date, to_date, limit, offset)
