@@ -23,9 +23,13 @@ from app.modules.identity.schemas import (
 )
 from app.modules.identity.security import (
     EMAIL_VERIFICATION_TTL,
+    PASSWORD_RESET_TTL,
     create_email_verification_token,
+    create_password_reset_token,
     decode_email_verification_token,
+    decode_password_reset_token,
     hash_password,
+    password_matches_reset_token,
     verify_password,
 )
 from app.modules.notifications import links
@@ -36,6 +40,12 @@ from app.modules.ops.enums import NotificationType
 INVALID_VERIFICATION_LINK = "Invalid or expired verification link"
 # A user may ask for a new verification email at most this often (registration counts).
 VERIFICATION_RESEND_COOLDOWN = timedelta(seconds=60)
+
+# Same idea for password reset: one message for every bad link.
+INVALID_RESET_LINK = "Invalid or expired password reset link"
+# A password reset email goes to one address at most this often. Anyone can ask for it, so the
+# limit is what stops the endpoint from being used to flood somebody's inbox.
+PASSWORD_RESET_COOLDOWN = timedelta(seconds=60)
 
 # Hash of a throwaway password. Checked when the email is unknown so that
 # "unknown email" and "wrong password" take the same time (no user enumeration).
@@ -113,6 +123,53 @@ def resend_verification_email(session: Session, user: User) -> None:
             )
     send_verification_email(session, user, now)
     session.commit()  # the timestamp; the queued email goes out after this
+
+
+def request_password_reset(session: Session, email: str) -> None:
+    """Email a reset link to the account with this address, if there is one.
+
+    Always returns normally, so the answer never tells a stranger whether an address has an
+    account: unknown email, suspended account and "asked too recently" all do nothing. The row
+    is locked (FOR UPDATE) before the clock is read, like the verification resend.
+    """
+    found = session.scalar(select(User.id).where(User.email == normalize_email(email)))
+    user = repository.lock_user(session, found) if found else None
+    if user is None or user.is_suspended:
+        session.rollback()
+        return
+    now = datetime.now(UTC)
+    last = user.password_reset_sent_at
+    if last is not None and last + PASSWORD_RESET_COOLDOWN > now:
+        session.rollback()
+        return
+    user.password_reset_sent_at = now
+    token = create_password_reset_token(user.id, user.password_hash)
+    context = {
+        "reset_url": links.password_reset_url(token),
+        "expires_hours": int(PASSWORD_RESET_TTL.total_seconds() // 3600),
+    }
+    notifications.notify(session, user, NotificationType.PASSWORD_RESET, context, in_app=False)
+    session.commit()  # the timestamp; the queued email goes out after this
+
+
+def reset_password(session: Session, token: str, new_password: str) -> None:
+    """Set a new password from a reset link.
+
+    The token carries a fingerprint of the password it was issued for, so it works once: after
+    the change the fingerprint no longer matches. Expired, tampered, wrong-kind, used, unknown
+    user and suspended user all get the same InvalidInputError.
+    """
+    decoded = decode_password_reset_token(token)
+    user = repository.lock_user(session, decoded[0]) if decoded else None
+    if (
+        user is None
+        or user.is_suspended
+        or not password_matches_reset_token(user.password_hash, decoded[1])
+    ):
+        session.rollback()
+        raise InvalidInputError(INVALID_RESET_LINK)
+    user.password_hash = hash_password(new_password)
+    session.commit()
 
 
 def authenticate_user(session: Session, email: str, password: str) -> User | None:

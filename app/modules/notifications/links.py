@@ -19,6 +19,9 @@ TICKETS_PATH = "/tickets"
 SUPPORT_CASE_PATH = "/support/cases/{case_id}"
 # Email verification: the web app reads ?token= and calls POST /auth/verify-email.
 VERIFY_EMAIL_PATH = "/verify-email"
+# Password reset: the web app reads ?token=, asks for a new password and calls
+# POST /auth/reset-password.
+RESET_PASSWORD_PATH = "/reset-password"
 
 
 def web_url(path: str) -> str:
@@ -48,3 +51,7 @@ def support_url(case_id: uuid.UUID) -> str:
 
 def verify_email_url(token: str) -> str:
     return web_url(VERIFY_EMAIL_PATH) + "?" + urlencode({"token": token})
+
+
+def password_reset_url(token: str) -> str:
+    return web_url(RESET_PASSWORD_PATH) + "?" + urlencode({"token": token})

@@ -86,6 +86,10 @@ CONTEXTS: dict[NotificationType, dict] = {
         "verify_url": "https://ticketoff.store/verify?token=TOKEN",
         "expires_hours": 24,
     },
+    NotificationType.PASSWORD_RESET: {
+        "reset_url": "https://ticketoff.store/reset-password?token=TOKEN",
+        "expires_hours": 1,
+    },
     NotificationType.SUPPORT_REPLY: {
         "case_subject": "Не пришёл билет",
         "message_excerpt": "Мы отправили билет повторно.",
@@ -169,6 +173,14 @@ EXPECTED: dict[tuple[NotificationType, str], tuple[str, tuple[str, ...]]] = {
     (NotificationType.ACCOUNT_VERIFICATION, "en"): (
         "Confirm your email for ticketoff",
         ("https://ticketoff.store/verify?token=TOKEN", "valid for 24 h"),
+    ),
+    (NotificationType.PASSWORD_RESET, "ru"): (
+        "Сброс пароля в ticketoff",
+        ("https://ticketoff.store/reset-password?token=TOKEN", "действует 1 ч"),
+    ),
+    (NotificationType.PASSWORD_RESET, "en"): (
+        "Reset your ticketoff password",
+        ("https://ticketoff.store/reset-password?token=TOKEN", "valid for 1 h"),
     ),
     (NotificationType.SUPPORT_REPLY, "ru"): (
         "Ответ поддержки: Не пришёл билет",

@@ -15,6 +15,7 @@ Context each template needs (values are plain: str, int, bool, aware datetime, l
   event_updated         event_title, tz_name, changes [{field: starts_at|ends_at|venue, old,
                         new}] (datetimes, or venue lines for venue)
   account_verification  verify_url, expires_hours
+  password_reset        reset_url, expires_hours
   support_reply         case_subject, message_excerpt, case_url
   support_status        case_subject, status (SupportStatus value), case_url
 
@@ -33,7 +34,7 @@ from app.modules.notifications.providers import Attachment, EmailMessage
 TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
 DEFAULT_LANGUAGE = Language.RU
 # Templates whose body carries a secret link: the console provider never logs their body.
-SECRET_TEMPLATES = frozenset({"account_verification"})
+SECRET_TEMPLATES = frozenset({"account_verification", "password_reset"})
 
 
 @pass_context

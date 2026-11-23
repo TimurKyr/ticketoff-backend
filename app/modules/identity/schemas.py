@@ -35,6 +35,16 @@ class VerifyEmailIn(BaseModel):
     token: str = Field(min_length=1, max_length=2048)
 
 
+class ForgotPasswordIn(BaseModel):
+    email: EmailStr
+
+
+class ResetPasswordIn(BaseModel):
+    # The token from the link's ?token= and the new password (same rules as registration).
+    token: str = Field(min_length=1, max_length=2048)
+    new_password: str = Field(min_length=8, max_length=128)
+
+
 class UserOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
