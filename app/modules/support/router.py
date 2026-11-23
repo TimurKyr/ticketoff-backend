@@ -1,16 +1,23 @@
 import uuid
+from typing import Annotated
 
-from fastapi import APIRouter, status
+from fastapi import APIRouter, File, Form, Response, UploadFile, status
 
+from app.common.errors import InvalidInputError
 from app.common.pagination import Limit, Offset
 from app.modules.identity.dependencies import CurrentUser, SessionDep
 from app.modules.ops.enums import SupportKind, SupportStatus
 from app.modules.support import service
+from app.modules.support.attachments import (
+    MAX_BYTES,
+    MAX_FILES,
+    IncomingFile,
+    content_disposition,
+)
 from app.modules.support.schemas import (
     CaseCreate,
     CaseDetailOut,
     CasePage,
-    MessageCreate,
     MessageOut,
     StatusUpdate,
 )
@@ -65,12 +72,61 @@ def get_case(case_id: uuid.UUID, user: CurrentUser, session: SessionDep) -> Case
     "/cases/{case_id}/messages",
     response_model=MessageOut,
     status_code=status.HTTP_201_CREATED,
-    summary="Reply in a case",
+    summary="Reply in a case, with up to 3 files (PNG, JPEG, PDF; 5 MB each)",
 )
 def add_message(
-    case_id: uuid.UUID, payload: MessageCreate, user: CurrentUser, session: SessionDep
+    case_id: uuid.UUID,
+    user: CurrentUser,
+    session: SessionDep,
+    body: Annotated[str, Form(max_length=5000, description="The message text")],
+    files: Annotated[list[UploadFile | str] | None, File(description="Up to 3 files")] = None,
 ) -> MessageOut:
-    return service.add_message(session, user, case_id, payload.body)
+    """multipart/form-data (a plain form without files works too), not JSON.
+
+    More than 3 files, a file that is not really a PNG, JPEG or PDF, or an empty one: 422.
+    A file over 5 MB: 413. One bad file refuses the whole message.
+    """
+    # Count first, read after: a request with hundreds of parts must be refused before any
+    # of them is read into memory. A browser sends an empty part when no file was chosen,
+    # and that one does not count.
+    uploads: list[UploadFile] = []
+    for part in files or []:
+        if isinstance(part, str):
+            # An empty file input arrives as a plain empty field; anything else is not a file.
+            if part:
+                raise InvalidInputError("files must be files")
+        elif part.filename or part.size:
+            uploads.append(part)
+    if len(uploads) > MAX_FILES:
+        raise InvalidInputError(f"At most {MAX_FILES} files per message")
+    incoming = [
+        # One byte over the limit is enough to refuse a file.
+        IncomingFile(upload.filename, upload.file.read(MAX_BYTES + 1))
+        for upload in uploads
+    ]
+    return service.add_message(session, user, case_id, body, incoming)
+
+
+@router.get(
+    "/attachments/{attachment_id}",
+    response_class=Response,
+    responses={200: {"content": {"application/octet-stream": {}}, "description": "The file"}},
+    summary="Download a file of a message (whoever can see the case)",
+)
+def download_attachment(
+    attachment_id: uuid.UUID, user: CurrentUser, session: SessionDep
+) -> Response:
+    file = service.get_attachment(session, user, attachment_id)
+    return Response(
+        content=file.data,
+        media_type=file.content_type,
+        headers={
+            "Content-Disposition": content_disposition(file.filename),
+            # The browser must not guess a type and run the file; and it is private data.
+            "X-Content-Type-Options": "nosniff",
+            "Cache-Control": "private, no-store",
+        },
+    )
 
 
 @router.post(

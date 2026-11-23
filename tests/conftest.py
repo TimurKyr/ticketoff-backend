@@ -1,4 +1,5 @@
 from collections.abc import Iterator
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -8,6 +9,7 @@ import app.modules.registry  # noqa: F401
 from app.core.db import engine, get_session
 from app.main import app
 from app.modules.notifications import service as notifications
+from app.modules.support.storage import LocalDiskStorage, set_storage
 from tests.emails import RecordingEmailProvider
 
 
@@ -62,3 +64,13 @@ def emails() -> Iterator[RecordingEmailProvider]:
     notifications.set_provider(recorder)
     yield recorder
     notifications.set_provider(None)
+
+
+@pytest.fixture(autouse=True)
+def attachment_storage(tmp_path: Path) -> Iterator[LocalDiskStorage]:
+    """Support attachments go to a temporary folder in every test, never to the project's.
+    Tests that care read `attachment_storage.root`."""
+    storage = LocalDiskStorage(tmp_path / "attachments")
+    set_storage(storage)
+    yield storage
+    set_storage(None)

@@ -2,12 +2,12 @@ import uuid
 from dataclasses import dataclass
 
 from sqlalchemy import ColumnElement, exists, func, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from app.modules.events.models import Event
 from app.modules.identity.models import OrganizerProfile, User
 from app.modules.ops.enums import SupportKind, SupportStatus
-from app.modules.ops.models import SupportCase, SupportMessage
+from app.modules.ops.models import SupportAttachment, SupportCase, SupportMessage
 from app.modules.orders.models import Order, OrderItem, Ticket
 
 
@@ -35,9 +35,23 @@ def list_messages(session: Session, case_id: uuid.UUID) -> list[SupportMessage]:
     stmt = (
         select(SupportMessage)
         .where(SupportMessage.case_id == case_id)
+        .options(selectinload(SupportMessage.attachments))  # one query for all of them
         .order_by(SupportMessage.created_at, SupportMessage.id)
     )
     return list(session.scalars(stmt))
+
+
+def get_attachment(
+    session: Session, attachment_id: uuid.UUID
+) -> tuple[SupportAttachment, uuid.UUID] | None:
+    """The attachment and the id of the case it belongs to (to check who may see it)."""
+    stmt = (
+        select(SupportAttachment, SupportMessage.case_id)
+        .join(SupportMessage, SupportMessage.id == SupportAttachment.message_id)
+        .where(SupportAttachment.id == attachment_id)
+    )
+    row = session.execute(stmt).one_or_none()
+    return None if row is None else (row[0], row[1])
 
 
 @dataclass(frozen=True, slots=True)

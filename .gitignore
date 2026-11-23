@@ -33,6 +33,8 @@ htmlcov/
 
 # Production DB dumps (server)
 backups/
+# Local support attachments (BE-33)
+/data/
 
 # Built web app uploaded to the server (ticketoff-web scripts/deploy.sh)
 /web/

@@ -38,6 +38,11 @@ services:
       SMTP_PASSWORD: ${SMTP_PASSWORD:-}
       SMTP_STARTTLS: ${SMTP_STARTTLS:-true}
       SMTP_TIMEOUT: ${SMTP_TIMEOUT:-10}
+      # Support message attachments (BE-33): files live in the `attachments` volume, the
+      # database keeps only their names. Back the volume up with the database (docs/DEPLOY.md).
+      ATTACHMENTS_DIR: /data/attachments
+    volumes:
+      - attachments:/data/attachments
     expose:
       - "8000"
     depends_on:
@@ -65,5 +70,6 @@ services:
 
 volumes:
   pgdata:
+  attachments:
   caddy_data:
   caddy_config:

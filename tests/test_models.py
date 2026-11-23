@@ -28,6 +28,7 @@ def test_models_configure_and_register_all_tables() -> None:
         "seat_holds",
         "seats",
         "staff_assignments",
+        "support_attachments",
         "support_cases",
         "support_messages",
         "ticket_types",

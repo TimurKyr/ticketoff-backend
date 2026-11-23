@@ -5,6 +5,9 @@ The API runs on one VPS (Ubuntu 24.04) with Docker Compose: `db` (Postgres 16, v
 and the web app on `ticketoff.store`, certificates from Let's Encrypt). Only ports 22, 80 and 443 are open; Postgres and the API are not
 published to the host.
 
+The API also keeps the files sent with support messages (BE-33) in the volume `attachments`
+(`/data/attachments` inside the `api` container, one file per attachment, named by its uuid).
+
 Files: `docker-compose.prod.yml`, `deploy/Caddyfile`, `.env.prod.example`, `scripts/backup-db.sh`.
 
 ## Prerequisites
@@ -96,6 +99,31 @@ Restore into the running stack:
 docker compose -f docker-compose.prod.yml exec -T db \
   sh -c 'pg_restore -U "$POSTGRES_USER" -d "$POSTGRES_DB" --clean --if-exists' < backups/<file>.dump
 ```
+
+### Support attachments (the `attachments` volume)
+
+The database dump holds only the names, types and sizes of the files sent with support messages;
+**the files themselves are in the volume `attachments`, so a dump alone does not save them**. Back
+the folder up together with the dump (same cron, same day):
+
+```bash
+cd /opt/ticketoff
+docker compose -f docker-compose.prod.yml exec -T api \
+  tar czf - -C /data/attachments . > backups/attachments-$(date +%Y-%m-%d).tar.gz
+```
+
+Restore (into the running stack; existing files with the same name are overwritten):
+
+```bash
+docker compose -f docker-compose.prod.yml exec -T api \
+  tar xzf - -C /data/attachments < backups/attachments-<date>.tar.gz
+```
+
+Restore the dump and the archive from the same day: a row without its file answers 404 on
+download, and a file without a row is just unused space. Removing the volume
+(`docker compose down -v`) deletes the files for good. The limits (3 files, 5 MB each, PNG, JPEG
+or PDF) are in `app/modules/support/attachments.py`; the storage is behind an interface
+(`app/modules/support/storage.py`), so it can be replaced by an S3-compatible store later.
 
 ## Demo data
 

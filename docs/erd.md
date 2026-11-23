@@ -274,6 +274,7 @@ erDiagram
 - **Notification** — исходящее уведомление. `channel`: `email` · `in_app`.
 - **SupportCase** — тред поддержки. `kind`: `attendee` · `organizer` · `report` (жалоба на событие, видит только platform admin). `status`: `open` · `in_progress` · `waiting_customer` · `resolved`.
 - **SupportMessage** — сообщение внутри кейса.
+- **SupportAttachment** — _бонус (BE-33)_: файл к сообщению (PNG, JPEG или PDF, до 3 на сообщение, до 5 МБ). В БД только `filename`, `content_type` (по сигнатуре), `size`; сами файлы лежат в docker volume `attachments`, имя файла на диске — `id` вложения.
 
 ### Promotions
 - **PromotionalCampaign** — скидочная кампания события. `discount_type`: `percent` · `fixed`.

@@ -219,7 +219,7 @@ def test_core_flow_support_case(session_api: TestClient, db_session: Session) ->
     _ok(
         api.post(
             f"/support/cases/{case['id']}/messages",
-            json={"body": "It is in My tickets."},
+            data={"body": "It is in My tickets."},
             headers=organizer,
         ),
         201,

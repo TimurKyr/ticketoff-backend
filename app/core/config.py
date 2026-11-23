@@ -32,6 +32,9 @@ class Settings(BaseSettings):
     processing_fee_percent: int = Field(default=3, ge=0, le=100)
     # How long a pending paid order holds inventory before it expires.
     checkout_hold_minutes: int = Field(default=15, ge=1)
+    # Where support message attachments are stored (BE-33). In production this is the
+    # docker volume mounted at /data/attachments; back it up together with the database.
+    attachments_dir: str = "data/attachments"
     # Email (BE-18). "console" only logs the emails (local, tests); "smtp" sends them.
     email_provider: Literal["console", "smtp"] = "console"
     email_from: str = "ticketoff <no-reply@ticketoff.store>"

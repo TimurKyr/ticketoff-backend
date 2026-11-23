@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from typing import Annotated, Literal, Self
 
-from pydantic import BaseModel, ConfigDict, StringConstraints, model_validator
+from pydantic import BaseModel, ConfigDict, StringConstraints, computed_field, model_validator
 
 from app.modules.ops.enums import SupportCategory, SupportKind, SupportStatus
 
@@ -48,15 +48,27 @@ class CaseCreate(BaseModel):
         return self
 
 
-class MessageCreate(BaseModel):
-    body: MessageBody
-
-
 class StatusUpdate(BaseModel):
     # "open" is only the starting status; nobody sets it by hand.
     status: Literal[
         SupportStatus.IN_PROGRESS, SupportStatus.WAITING_CUSTOMER, SupportStatus.RESOLVED
     ]
+
+
+class AttachmentOut(BaseModel):
+    """A file sent with a message (BE-33). `url` is the download path (needs the login)."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    filename: str
+    content_type: str
+    size: int
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def url(self) -> str:
+        return f"/support/attachments/{self.id}"
 
 
 class MessageOut(BaseModel):
@@ -67,6 +79,7 @@ class MessageOut(BaseModel):
     sender_id: uuid.UUID
     body: str
     created_at: datetime
+    attachments: list[AttachmentOut] = []
 
 
 class CaseOut(BaseModel):
