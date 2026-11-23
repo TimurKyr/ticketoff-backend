@@ -1,7 +1,7 @@
 """Links in emails to pages of the web app (ticketoff-web's router).
 
 Every web path an email uses is here, so a route change is a one-line edit. Links are built
-on Settings.frontend_url.
+on Settings.frontend_url; the one API link (the .ics file) on Settings.public_api_url.
 """
 
 import uuid
@@ -9,6 +9,8 @@ from urllib.parse import urlencode
 
 from app.core.config import get_settings
 
+# The public event page (also what a campaign QR and a calendar entry link to).
+EVENT_PATH = "/events/{event_id}"
 # One order: confirmation, failed payment, refund, cancelled event.
 ORDER_PATH = "/orders/{order_id}"
 # All of the buyer's tickets: the order email links here when there are too many to attach.
@@ -21,6 +23,15 @@ VERIFY_EMAIL_PATH = "/verify-email"
 
 def web_url(path: str) -> str:
     return get_settings().frontend_url.rstrip("/") + path
+
+
+def event_url(event_id: uuid.UUID) -> str:
+    return web_url(EVENT_PATH.format(event_id=event_id))
+
+
+def calendar_ics_url(event_id: uuid.UUID) -> str:
+    """The event's .ics file (GET /events/{id}/calendar.ics), on the API, not the web app."""
+    return get_settings().public_api_url.rstrip("/") + f"/events/{event_id}/calendar.ics"
 
 
 def order_url(order_id: uuid.UUID) -> str:

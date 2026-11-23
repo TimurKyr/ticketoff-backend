@@ -192,6 +192,8 @@ def test_free_registration_emails_the_buyer_with_pdfs(
     assert "- Вход: Гость 0" in email.text and "- Вход: Гость 1" in email.text
     assert "₸" not in email.text  # free: no amounts
     assert f"Заказ: {order_link(order.id)}" in email.text
+    calendar = f"https://api.ticketoff.store/events/{order.event_id}/calendar.ics"
+    assert f"Добавить в календарь (.ics): {calendar}" in email.text
     assert sorted(a.filename for a in email.attachments) == sorted(
         f"ticket-{t.id}.pdf" for t in order.tickets
     )
@@ -544,6 +546,7 @@ def test_event_cancel_emails_each_affected_buyer_once(
     assert "Мы полностью вернули оплату: 15 000 ₸." in plain(email.text)
     for o in (free, paid_a, paid_b):
         assert f"Заказ: {order_link(o.id)}" in email.text
+    assert f"https://api.ticketoff.store/events/{event.id}/calendar.ics" in email.text
 
     # Free registration only, in English: no refund line.
     [email] = emails.to(free_only.email)

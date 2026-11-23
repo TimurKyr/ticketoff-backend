@@ -10,6 +10,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     false,
+    func,
 )
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
@@ -116,10 +117,15 @@ class Event(Base):
     end_at = Column(DateTime(timezone=True))
     registration_opens_at = Column(DateTime(timezone=True))
     registration_closes_at = Column(DateTime(timezone=True))
+    # Any change to the row (BE-31): the calendar file's SEQUENCE and LAST-MODIFIED.
+    updated_at = Column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
 
     # Not columns: set per request by events.service.annotate_on_sale for EventOut.
     price_from = None
     availability = None
+    calendar_links = None
 
     venue = relationship("Venue")
     organizer = relationship("OrganizerProfile")

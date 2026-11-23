@@ -64,6 +64,7 @@ def order_confirmed(session: Session, order: Order) -> None:
         "paid_kzt": order.total_kzt - order.discount_kzt,
         "order_url": links.order_url(order.id),
         "tickets_url": files.tickets_url,
+        "calendar_url": links.calendar_ics_url(event.id),
     }
     notify(
         session,
@@ -133,7 +134,8 @@ def event_cancelled(
         by_buyer.setdefault(order.buyer_user_id, []).append(order)
     # All buyers in one query: order.buyer would lazy-load one user per buyer.
     buyers = repository.users_by_id(session, by_buyer)
-    base = _event_context(event)
+    # The .ics with STATUS:CANCELLED: importing it drops the entry the buyer added.
+    base = {**_event_context(event), "calendar_url": links.calendar_ics_url(event.id)}
     for buyer_id, orders in by_buyer.items():
         refund = sum(refunded_kzt.get(o.id, 0) for o in orders)
         notify(

@@ -5,8 +5,9 @@ from datetime import UTC, datetime
 from sqlalchemy.orm import Session
 
 from app.common.errors import BusinessRuleError, InvalidInputError, NotFoundError
+from app.modules.audit import repository as audit_repository
 from app.modules.audit import service as audit
-from app.modules.events import repository
+from app.modules.events import calendar, repository
 from app.modules.events.enums import EventStatus, EventVisibility
 from app.modules.events.models import Event, Venue
 from app.modules.events.schemas import (
@@ -246,6 +247,25 @@ def get_public_event(session: Session, event_id: uuid.UUID) -> Event:
     return event
 
 
+def get_calendar_event(session: Session, event_id: uuid.UUID) -> Event:
+    """GET /events/{id}/calendar.ics: what get_public_event allows, plus cancelled and
+    completed events that were published once (non-private).
+
+    A cancelled event's file is how a calendar learns of the cancel (STATUS:CANCELLED, the
+    same UID). An event cancelled while still a draft was never public: 404, as for drafts.
+    """
+    event = repository.get_event(session, event_id)
+    if event is None or event.visibility == EventVisibility.PRIVATE:
+        raise NotFoundError("Event not found")
+    if event.status == EventStatus.PUBLISHED:
+        return event
+    if event.status in _CLOSED and audit_repository.has_action(
+        session, event.id, "event.published"
+    ):
+        return event
+    raise NotFoundError("Event not found")
+
+
 def list_venues(session: Session) -> list[Venue]:
     return repository.list_venues(session)
 
@@ -292,13 +312,19 @@ def list_organizer_events(
 def annotate_on_sale(
     session: Session, events: Iterable[Event], now: datetime | None = None
 ) -> None:
-    """Set price_from and availability (EventOut) on each event, in one query for all.
+    """Set price_from, availability and calendar_links (EventOut) on each event, in one
+    query for all, plus one for the venues the links need.
 
     Same ticket types as the public ticket type list: visible, inside their sales window.
     """
     events = list(events)
     stats = repository.on_sale_stats(session, [e.id for e in events], now or _now())
+    # Loaded into the session, so event.venue below is an identity-map hit, not a query.
+    # Kept in a variable: the identity map holds objects weakly.
+    venues = repository.load_venues(session, {e.venue_id for e in events})
     for event in events:
         row = stats.get(event.id)
         event.price_from = row.min_price_kzt if row else None
         event.availability = availability_of(row.available, row.quantity_total) if row else None
+        event.calendar_links = calendar.links_for(event)
+    del venues

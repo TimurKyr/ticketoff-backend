@@ -132,6 +132,17 @@ class VenueOut(BaseModel):
     timezone: str
 
 
+class CalendarLinks(BaseModel):
+    """Add-to-calendar (BE-31). Nothing is written to anyone's calendar: these open the
+    user's own calendar app or download a file."""
+
+    google: str = Field(description="Google Calendar 'create event' page, times in UTC")
+    outlook: str = Field(description="Outlook.com 'new event' page, times in UTC")
+    ics: str = Field(
+        description="GET /events/{id}/calendar.ics: iCalendar file in the venue's time zone"
+    )
+
+
 class EventOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -164,6 +175,7 @@ class EventOut(BaseModel):
             f"{FEW_LEFT_PERCENT}% of the on-sale quantity"
         ),
     )
+    calendar_links: CalendarLinks
 
 
 class EventPage(BaseModel):

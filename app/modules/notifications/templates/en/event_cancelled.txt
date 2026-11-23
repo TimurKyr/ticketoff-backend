@@ -11,3 +11,5 @@ Your orders for this event are cancelled and the tickets are no longer valid.
 {% for url in order_urls %}
 Order: {{ url }}
 {% endfor %}
+
+If you added the event to your calendar, open this file (.ics) and your calendar will mark it cancelled: {{ calendar_url }}

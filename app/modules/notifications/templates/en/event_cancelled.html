@@ -12,4 +12,5 @@
       <a href="{{ url }}">Open order{% if order_urls | length > 1 %} {{ loop.index }}{% endif %}</a><br>
 {% endfor %}
     </p>
+    <p>If you added the event to your calendar, open <a href="{{ calendar_url }}">this file (.ics)</a> and your calendar will mark it cancelled.</p>
 {% endblock %}

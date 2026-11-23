@@ -16,6 +16,9 @@ MOVED = datetime(2026, 11, 28, 15, 30, tzinfo=UTC)
 RETRY = datetime(2026, 11, 20, 9, 15, tzinfo=UTC)
 TZ = "Asia/Almaty"
 ORDER_URL = "https://ticketoff.store/orders/0b9d7c1e-0000-4000-8000-000000000001"
+CALENDAR_URL = (
+    "https://api.ticketoff.store/events/0b9d7c1e-0000-4000-8000-000000000002/calendar.ics"
+)
 
 
 def plain(text: str) -> str:
@@ -39,6 +42,7 @@ def order_context(**overrides: object) -> dict:
         "paid_kzt": 22500,
         "order_url": ORDER_URL,
         "tickets_url": None,
+        "calendar_url": CALENDAR_URL,
         **overrides,
     }
 
@@ -67,6 +71,7 @@ CONTEXTS: dict[NotificationType, dict] = {
         "tz_name": TZ,
         "refund_kzt": 22500,
         "order_urls": [ORDER_URL],
+        "calendar_url": CALENDAR_URL,
     },
     NotificationType.EVENT_UPDATED: {
         "event_title": "Джаз в парке",
@@ -320,3 +325,16 @@ def test_text_layout_keeps_one_line_per_item() -> None:
 
     order = build_email("a@example.com", "order_confirmed", "ru", order_context())
     assert order.text.startswith("Ваш заказ оплачен.\n\nСобытие:")
+
+
+@pytest.mark.parametrize("language", ["ru", "en"])
+@pytest.mark.parametrize(
+    "type_", [NotificationType.ORDER_CONFIRMED, NotificationType.EVENT_CANCELLED]
+)
+def test_order_and_cancel_emails_link_the_calendar_file(
+    type_: NotificationType, language: str
+) -> None:
+    """BE-31: the .ics link, in both parts of the email."""
+    email = build_email("a@example.com", type_.value, language, CONTEXTS[type_])
+    assert CALENDAR_URL in email.text
+    assert f'href="{CALENDAR_URL}"' in email.html
