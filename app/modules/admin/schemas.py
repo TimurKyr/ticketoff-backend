@@ -1,15 +1,15 @@
-"""Platform admin API (BE-22). Read models only; the actions return the changed entity."""
+"""Platform admin API (BE-22, BE-26). The actions return the changed entity."""
 
 import uuid
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.modules.identity.enums import SystemRole
 from app.modules.payments.enums import PaymentPurpose, PaymentStatus, RefundStatus
 
-SearchType = Literal["user", "event"]
+SearchType = Literal["user", "event", "order"]
 
 
 class AdminUserOut(BaseModel):
@@ -23,9 +23,13 @@ class AdminUserOut(BaseModel):
 
 
 class SearchItemOut(BaseModel):
-    """One search hit. label is the user's email or the event's title; status is the
-    user's system role or the event's status; suspended is users.is_suspended or
-    events.sales_suspended."""
+    """One search hit.
+
+    user: label = email, status = system role, suspended = users.is_suspended.
+    event: label = title, status = event status, suspended = events.sales_suspended.
+    order: label = "buyer email · amount KZT · status" (amount = what the buyer pays),
+    status = order status, suspended = sales_suspended of the order's event.
+    """
 
     type: SearchType
     id: uuid.UUID
@@ -80,10 +84,57 @@ class RefundPage(BaseModel):
 
 
 class PlatformSettingsOut(BaseModel):
-    """Read-only: these come from the server configuration (env), not from the database."""
+    """Platform fees. Saved by a platform admin (PATCH /admin/settings); until then the
+    server configuration (env). updated_at is null while the env values apply."""
 
     activation_fee_kzt: int
     processing_fee_percent: int
     checkout_hold_minutes: int
     currency: Literal["KZT"] = "KZT"
-    read_only: Literal[True] = True
+    read_only: Literal[False] = False
+    updated_at: datetime | None = None
+
+
+class PlatformSettingsUpdate(BaseModel):
+    """Only the fields sent change. Bounds as in the server configuration. A new activation
+    fee applies to activations paid from now on; paid ones keep their amount."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    activation_fee_kzt: int | None = Field(default=None, ge=1, le=10_000_000)
+    processing_fee_percent: int | None = Field(default=None, ge=0, le=100)
+    checkout_hold_minutes: int | None = Field(default=None, ge=1, le=1440)
+
+    @model_validator(mode="after")
+    def _something_to_change(self) -> "PlatformSettingsUpdate":
+        if not self.model_fields_set or any(
+            getattr(self, name) is None for name in self.model_fields_set
+        ):
+            raise ValueError("Send at least one setting, none of them null")
+        return self
+
+
+class PromoActivityOut(BaseModel):
+    """One campaign's redemptions in the period, on confirmed (paid or free) orders.
+
+    gross_kzt is what those orders were paid (after the discount)."""
+
+    event_id: uuid.UUID
+    event_title: str
+    campaign_id: uuid.UUID
+    campaign_name: str
+    codes: int
+    redemptions: int
+    discount_total_kzt: int
+    gross_kzt: int
+
+
+class PromoActivityPage(BaseModel):
+    """total_redemptions and total_discount_kzt cover every page, not only this one."""
+
+    items: list[PromoActivityOut]
+    total: int
+    limit: int
+    offset: int
+    total_redemptions: int
+    total_discount_kzt: int

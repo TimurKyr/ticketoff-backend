@@ -7,7 +7,7 @@ from sqlalchemy import ColumnElement, String, and_, cast, func, or_, select
 from sqlalchemy.engine import Row as ResultRow
 from sqlalchemy.orm import Session, contains_eager, joinedload, selectinload
 
-from app.core.config import get_settings
+from app.modules.admin.platform_settings import get_platform_settings
 from app.modules.events.models import Event, Row, Seat
 from app.modules.identity.models import User
 from app.modules.ops.models import CheckInRecord
@@ -49,9 +49,9 @@ def sales_window_clause(at: datetime) -> ColumnElement[bool]:
     )
 
 
-def checkout_hold() -> timedelta:
-    """How long a pending (unpaid) order holds its tickets."""
-    return timedelta(minutes=get_settings().checkout_hold_minutes)
+def checkout_hold(session: Session) -> timedelta:
+    """How long a pending (unpaid) order holds its tickets (platform settings, BE-26)."""
+    return timedelta(minutes=get_platform_settings(session).checkout_hold_minutes)
 
 
 def holding_orders_clause(now: datetime, hold: timedelta) -> ColumnElement[bool]:
@@ -87,7 +87,9 @@ def sold_quantities(
     stmt = (
         select(OrderItem.ticket_type_id, func.sum(OrderItem.quantity))
         .join(Order, Order.id == OrderItem.order_id)
-        .where(OrderItem.ticket_type_id.in_(ids), holding_orders_clause(now, checkout_hold()))
+        .where(
+            OrderItem.ticket_type_id.in_(ids), holding_orders_clause(now, checkout_hold(session))
+        )
         .group_by(OrderItem.ticket_type_id)
     )
     return {ticket_type_id: int(total) for ticket_type_id, total in session.execute(stmt)}
@@ -100,7 +102,7 @@ def held_quantity_for_event(session: Session, event_id: uuid.UUID, now: datetime
         select(func.coalesce(func.sum(OrderItem.quantity), 0))
         .join(Order, Order.id == OrderItem.order_id)
         .join(TicketType, TicketType.id == OrderItem.ticket_type_id)
-        .where(TicketType.event_id == event_id, holding_orders_clause(now, checkout_hold()))
+        .where(TicketType.event_id == event_id, holding_orders_clause(now, checkout_hold(session)))
     )
     return int(session.scalar(stmt) or 0)
 
@@ -114,7 +116,7 @@ def inventory_rows(session: Session, event_id: uuid.UUID, now: datetime) -> list
     item once per ticket. Types without any orders get zeros.
     sold + reserved uses the same clauses as sold_quantities (holding_orders_clause).
     """
-    hold = checkout_hold()
+    hold = checkout_hold(session)
     quantities = (
         select(
             OrderItem.ticket_type_id,

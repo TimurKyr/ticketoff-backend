@@ -1,23 +1,39 @@
 """Platform moderation (BE-22): suspend event sales and user accounts, search, read-only
-lists of payments, refunds and activations, read-only settings.
+lists of payments, refunds and activations. BE-26: order search, CSV reports, promo activity
+and editable platform settings.
 
 Every suspend/unsuspend that changes something writes an audit row in the same
 transaction. Repeating an action (suspend a suspended event) changes nothing and logs
 nothing.
 """
 
+import csv
+import io
 import uuid
+from datetime import UTC, date, datetime, time, timedelta
+from typing import Literal
+from zoneinfo import ZoneInfo
 
+from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
-from app.common.errors import BusinessRuleError, NotFoundError
-from app.core.config import get_settings
+from app.common.errors import BusinessRuleError, InvalidInputError, NotFoundError
 from app.modules.admin import repository
+from app.modules.admin.models import PlatformSettings
+from app.modules.admin.platform_settings import (
+    SETTINGS_ROW_ID,
+    env_defaults,
+    get_platform_settings,
+)
 from app.modules.admin.schemas import (
     AdminPaymentOut,
     AdminRefundOut,
     PaymentPage,
     PlatformSettingsOut,
+    PlatformSettingsUpdate,
+    PromoActivityOut,
+    PromoActivityPage,
     RefundPage,
     SearchItemOut,
     SearchPage,
@@ -93,6 +109,18 @@ def search(session: Session, q: str, type_: SearchType, limit: int, offset: int)
             )
             for u in users
         ]
+    elif type_ == "order":
+        rows, total = repository.search_orders(session, q, limit, offset)
+        items = [
+            SearchItemOut(
+                type="order",
+                id=order.id,
+                label=f"{email} · {order.total_kzt - order.discount_kzt} KZT · {order.status}",
+                status=order.status,
+                suspended=sales_suspended,
+            )
+            for order, email, sales_suspended in rows
+        ]
     else:
         events, total = repository.search_events(session, q, limit, offset)
         items = [
@@ -159,10 +187,204 @@ def list_refunds(
     return RefundPage(items=items, total=total, limit=limit, offset=offset)
 
 
-def get_settings_out() -> PlatformSettingsOut:
-    settings = get_settings()
+def get_settings_out(session: Session) -> PlatformSettingsOut:
+    row = session.get(PlatformSettings, SETTINGS_ROW_ID)
+    fees = get_platform_settings(session)
     return PlatformSettingsOut(
-        activation_fee_kzt=settings.activation_fee_kzt,
-        processing_fee_percent=settings.processing_fee_percent,
-        checkout_hold_minutes=settings.checkout_hold_minutes,
+        activation_fee_kzt=fees.activation_fee_kzt,
+        processing_fee_percent=fees.processing_fee_percent,
+        checkout_hold_minutes=fees.checkout_hold_minutes,
+        updated_at=row.updated_at if row is not None else None,
+    )
+
+
+def update_settings(
+    session: Session, admin: User, data: PlatformSettingsUpdate
+) -> PlatformSettingsOut:
+    """Save the fees sent. The first change copies the env values into the row, then
+    overwrites the fields sent. Audited (admin.settings_updated) with the old and new value
+    of each field that changed; sending the current values changes and logs nothing."""
+    # The row lock serializes two admins; ON CONFLICT covers two first saves at once.
+    defaults = env_defaults()
+    session.execute(
+        pg_insert(PlatformSettings)
+        .values(
+            id=SETTINGS_ROW_ID,
+            activation_fee_kzt=defaults.activation_fee_kzt,
+            processing_fee_percent=defaults.processing_fee_percent,
+            checkout_hold_minutes=defaults.checkout_hold_minutes,
+        )
+        .on_conflict_do_nothing(index_elements=[PlatformSettings.id])
+    )
+    row = session.scalars(
+        select(PlatformSettings)
+        .where(PlatformSettings.id == SETTINGS_ROW_ID)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    ).one()
+    changes: dict[str, dict[str, int]] = {}
+    for name, new in data.model_dump(exclude_unset=True).items():
+        old = getattr(row, name)
+        if old != new:
+            setattr(row, name, new)
+            changes[name] = {"old": old, "new": new}
+    if changes:
+        row.updated_by_user_id = admin.id
+        audit.log(
+            session,
+            actor_user_id=admin.id,
+            action_type="admin.settings_updated",
+            entity_type="platform_settings",
+            entity_id=None,
+            event_id=None,
+            details=changes,
+        )
+    session.commit()
+    return get_settings_out(session)
+
+
+# --- CSV reports (BE-26) ---
+
+# Report dates are calendar days in Kazakhstan; timestamps in the file are UTC (ISO 8601).
+REPORT_TZ = ZoneInfo("Asia/Almaty")
+ReportKind = Literal["payments", "refunds", "orders"]
+
+
+def _bounds(from_date: date | None, to_date: date | None) -> tuple[datetime | None, ...]:
+    """from_date and to_date are both inclusive days in REPORT_TZ."""
+    if from_date is not None and to_date is not None and from_date > to_date:
+        raise InvalidInputError("from_date must not be after to_date")
+    start = datetime.combine(from_date, time(), REPORT_TZ) if from_date else None
+    end = datetime.combine(to_date + timedelta(days=1), time(), REPORT_TZ) if to_date else None
+    return start, end
+
+
+def _iso(value: datetime) -> str:
+    return value.astimezone(UTC).isoformat()
+
+
+def _cell(value: object) -> str:
+    """One CSV cell. Booleans as true/false, None as empty. Free text (event titles,
+    refund reasons) that a spreadsheet would run as a formula gets a leading '."""
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, str) and value[:1] in ("=", "+", "-", "@", "\t", "\r"):
+        return "'" + value
+    return str(value)
+
+
+def _report_rows(
+    session: Session, kind: ReportKind, start: datetime | None, end: datetime | None
+) -> tuple[list[str], list[list[object]]]:
+    if kind == "payments":
+        header = [
+            "payment_id", "created_at", "purpose", "status", "amount_kzt", "order_id",
+            "event_id", "event_title", "buyer_email", "is_simulated",
+        ]  # fmt: skip
+        rows = [
+            [
+                p.id,
+                _iso(p.created_at),
+                p.purpose,
+                p.status,
+                p.amount_kzt,
+                p.order_id,
+                event_id,
+                title,
+                email,
+                p.is_simulated,
+            ]  # fmt: skip
+            for p, event_id, title, email in repository.payments_report(session, start, end)
+        ]
+    elif kind == "refunds":
+        header = [
+            "refund_id", "created_at", "status", "amount_kzt", "reason", "payment_id",
+            "order_id", "event_id", "buyer_email", "is_simulated",
+        ]  # fmt: skip
+        rows = [
+            [
+                r.id,
+                _iso(r.created_at),
+                r.status,
+                r.amount_kzt,
+                r.reason,
+                p.id,
+                p.order_id,
+                event_id,
+                email,
+                p.is_simulated,
+            ]  # fmt: skip
+            for r, p, event_id, email in repository.refunds_report(session, start, end)
+        ]
+    else:
+        header = [
+            "order_id", "created_at", "status", "event_id", "event_title", "buyer_email",
+            "tickets", "total_kzt", "discount_kzt", "paid_kzt", "promo_code", "is_simulated",
+        ]  # fmt: skip
+        # Every payment is simulated (ck_payments_is_simulated), so every order is too.
+        rows = [
+            [
+                o.id,
+                _iso(o.created_at),
+                o.status,
+                o.event_id,
+                title,
+                email,
+                tickets,
+                o.total_kzt,
+                o.discount_kzt,
+                o.total_kzt - o.discount_kzt,
+                code,
+                True,
+            ]  # fmt: skip
+            for o, title, email, tickets, code in repository.orders_report(session, start, end)
+        ]
+    return header, rows
+
+
+def build_report(
+    session: Session, kind: ReportKind, from_date: date | None, to_date: date | None
+) -> tuple[str, bytes]:
+    """(file name, CSV bytes): UTF-8 with a BOM so Excel opens Cyrillic right, comma
+    separated, one header row, then one row per record in the period, oldest first.
+    No card data exists to leak; the only personal data is the buyer's email."""
+    start, end = _bounds(from_date, to_date)
+    header, rows = _report_rows(session, kind, start, end)
+    out = io.StringIO()
+    writer = csv.writer(out, lineterminator="\r\n")
+    writer.writerow(header)
+    for row in rows:
+        writer.writerow([_cell(v) for v in row])
+    period = f"{from_date or 'start'}_{to_date or 'now'}"
+    return f"ticketoff-{kind}-{period}.csv", ("\ufeff" + out.getvalue()).encode("utf-8")
+
+
+def promo_activity(
+    session: Session, from_date: date | None, to_date: date | None, limit: int, offset: int
+) -> PromoActivityPage:
+    start, end = _bounds(from_date, to_date)
+    rows, total, redemptions, discount = repository.promo_activity(
+        session, start, end, limit, offset
+    )
+    return PromoActivityPage(
+        items=[
+            PromoActivityOut(
+                event_id=campaign.event_id,
+                event_title=title,
+                campaign_id=campaign.id,
+                campaign_name=campaign.name,
+                codes=codes,
+                redemptions=used,
+                discount_total_kzt=int(discount_kzt),
+                gross_kzt=int(gross),
+            )
+            for campaign, title, codes, used, discount_kzt, gross in rows
+        ],
+        total=total,
+        limit=limit,
+        offset=offset,
+        total_redemptions=redemptions,
+        total_discount_kzt=discount,
     )

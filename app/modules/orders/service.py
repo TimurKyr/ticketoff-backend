@@ -3,7 +3,7 @@ from collections.abc import Iterable, Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Literal
 
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, object_session
 
 from app.common.errors import BusinessRuleError, NotFoundError, PermissionDeniedError
 from app.modules.audit import service as audit
@@ -453,7 +453,7 @@ def _expires_at(order: Order) -> datetime | None:
     """When a pending order stops holding its tickets; None for every other status."""
     if order.status != OrderStatus.PENDING:
         return None
-    return order.created_at + repository.checkout_hold()
+    return order.created_at + repository.checkout_hold(object_session(order))
 
 
 def _build_order(
@@ -777,7 +777,7 @@ def list_event_orders(
     check_ins = repository.check_ins_by_ticket(
         session, [t.id for order in orders for item in order.items for t in item.tickets]
     )
-    hold = repository.checkout_hold()
+    hold = repository.checkout_hold(session)
     items = [
         _event_order_out(
             order,

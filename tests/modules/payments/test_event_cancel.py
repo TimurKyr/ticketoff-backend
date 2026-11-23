@@ -98,7 +98,7 @@ def stock(
     orders_service.cancel_order(session, b, s.already_cancelled.id)
     service.refund_order(session, owner, s.already_refunded.id, RefundIn(reason="Earlier"))
     session.get_one(Ticket, s.paid_two.tickets[0].id).status = TicketStatus.CHECKED_IN
-    expired = orders_repository.checkout_hold() + timedelta(minutes=1)
+    expired = orders_repository.checkout_hold(session) + timedelta(minutes=1)
     session.get_one(Order, s.pending_expired.id).created_at = datetime.now(UTC) - expired
     session.flush()
     return s

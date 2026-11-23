@@ -6,12 +6,12 @@ from pydantic import AwareDatetime
 from app.common.pagination import Limit, Offset
 from app.modules.audit import service
 from app.modules.audit.schemas import TimelinePage
-from app.modules.events.dependencies import require_event_owner
+from app.modules.events.dependencies import require_event_owner_or_admin
 from app.modules.events.models import Event
 from app.modules.identity.dependencies import SessionDep
 
-# The path's event, if the logged-in organizer owns it; otherwise 404 (403 if not an organizer).
-OwnedEventDep = Annotated[Event, Depends(require_event_owner)]
+# The path's event, for its organizer or a platform admin (BE-26); anyone else gets 404.
+OwnedEventDep = Annotated[Event, Depends(require_event_owner_or_admin)]
 
 # Read-only on purpose: the audit log is append-only, so there is no PATCH or DELETE.
 timeline_router = APIRouter(prefix="/events", tags=["audit"])
@@ -20,7 +20,7 @@ timeline_router = APIRouter(prefix="/events", tags=["audit"])
 @timeline_router.get(
     "/{event_id}/timeline",
     response_model=TimelinePage,
-    summary="Audit log of my event, oldest first",
+    summary="Audit log of my event (any event for a platform admin), oldest first",
 )
 def get_timeline(
     event: OwnedEventDep,

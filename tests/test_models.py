@@ -19,6 +19,7 @@ def test_models_configure_and_register_all_tables() -> None:
         "organizer_profiles",
         "payments",
         "payout_accounts",
+        "platform_settings",
         "promo_codes",
         "promo_redemptions",
         "promotional_campaigns",

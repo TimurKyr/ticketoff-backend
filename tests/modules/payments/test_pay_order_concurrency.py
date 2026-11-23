@@ -340,7 +340,8 @@ def test_pay_at_the_hold_boundary_never_oversells(
         order.created_at = created_at  # a known start, so the hold boundary is exact
         order_id = order.id
         session.commit()
-    expires_at = created_at + orders_repository.checkout_hold()
+        hold = orders_repository.checkout_hold(session)
+    expires_at = created_at + hold
     clock = _FakeClock.install(monkeypatch, start=expires_at - timedelta(seconds=1))
 
     # Pause pay after every check (clock read, not expired) and before its commit.
@@ -403,7 +404,8 @@ def test_checkout_that_counted_an_expired_order_wins_over_its_late_pay(
         order.created_at = created_at
         order_id = order.id
         session.commit()
-    expires_at = created_at + orders_repository.checkout_hold()
+        hold = orders_repository.checkout_hold(session)
+    expires_at = created_at + hold
     _FakeClock.install(monkeypatch, start=expires_at + timedelta(seconds=1))
 
     # Pause the checkout after it counted (order expired) and before its commit.
