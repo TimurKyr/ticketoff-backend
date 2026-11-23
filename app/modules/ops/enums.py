@@ -25,9 +25,13 @@ class NotificationType(enum.StrEnum):
 class SupportKind(enum.StrEnum):
     ATTENDEE = "attendee"
     ORGANIZER = "organizer"
+    # BE-27 (R-124): a report about an event, handled only by platform admins.
+    # Native Postgres enum: a new value needs ALTER TYPE ... ADD VALUE in a migration.
+    REPORT = "report"
 
 
-# TODO(team): the ERD lists no support categories; these are a first guess to confirm.
+# The categories of the spec (R-87, 4.12). `ticket` is ticket delivery, `event` is event
+# information. seating, check_in and technical are BE-27 (ALTER TYPE in a migration).
 class SupportCategory(enum.StrEnum):
     PAYMENT = "payment"
     REFUND = "refund"
@@ -35,6 +39,9 @@ class SupportCategory(enum.StrEnum):
     EVENT = "event"
     ACCOUNT = "account"
     OTHER = "other"
+    SEATING = "seating"
+    CHECK_IN = "check_in"
+    TECHNICAL = "technical"
 
 
 class SupportStatus(enum.StrEnum):

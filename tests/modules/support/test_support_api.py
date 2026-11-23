@@ -11,15 +11,16 @@ from dataclasses import dataclass
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import event as sa_event
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from app.core.db import engine, get_session
 from app.main import app
-from app.modules.events.enums import EventStatus
+from app.modules.events.enums import EventStatus, EventVisibility
 from app.modules.events.models import Event
 from app.modules.identity.enums import SystemRole
 from app.modules.identity.models import OrganizerProfile, User
+from app.modules.ops.enums import SupportCategory, SupportKind
 from app.modules.ops.models import Notification
 from app.modules.orders import repository as orders_repository
 from app.modules.orders.enums import OrderStatus, TicketKind
@@ -751,3 +752,231 @@ def test_listing_10_cases_runs_as_many_queries_as_2(
         counts.append(_list_statements(api, who, path))
 
     assert counts[0] == counts[1], f"{counts[0]} statements for 2 cases, {counts[1]} for 10"
+
+
+# --- categories and event reports (BE-27) ---------------------------------------------------
+
+
+def report(api: TestClient, who: Account, event: Event, **overrides: object):
+    body = {"kind": "report", "category": "event", "body": "Looks like a scam"}
+    body |= {"event_id": str(event.id)} | overrides
+    return api.post("/support/cases", json=body, headers=who.headers)
+
+
+def case_ids(api: TestClient, who: Account, path: str = "/support/inbox", **params: object):
+    return {row["id"] for row in items(api, who, path, **params)}
+
+
+@pytest.mark.parametrize("category", ["seating", "check_in", "technical"])
+def test_the_new_categories_are_accepted(
+    api: TestClient, buyer: Account, event: Event, category: str
+) -> None:
+    case = attendee_case(api, buyer, event, category=category)
+
+    assert case["category"] == category
+
+
+def test_an_organizer_case_may_use_the_new_categories(api: TestClient, organizer: Account) -> None:
+    assert open_case(api, organizer, kind="organizer", category="technical")["kind"] == "organizer"
+
+
+def test_the_database_has_every_kind_and_category(db_session: Session) -> None:
+    """alembic check can't see enum values; this catches a missing ALTER TYPE."""
+
+    def labels(type_name: str) -> set[str]:
+        return set(
+            db_session.scalars(
+                text(
+                    "SELECT e.enumlabel FROM pg_enum e JOIN pg_type t ON t.oid = e.enumtypid"
+                    " WHERE t.typname = :name"
+                ),
+                {"name": type_name},
+            ).all()
+        )
+
+    assert labels("supportkind") == {k.value for k in SupportKind}
+    assert labels("supportcategory") == {c.value for c in SupportCategory}
+
+
+def test_anyone_can_report_a_published_event_without_buying(
+    api: TestClient, buyer: Account, event: Event
+) -> None:
+    response = report(api, buyer, event)
+
+    assert response.status_code == 201, response.text
+    case = response.json()
+    assert (case["kind"], case["category"], case["status"]) == ("report", "event", "open")
+    assert case["event_id"] == str(event.id) and case["opened_by"] == str(buyer.user.id)
+    assert [m["body"] for m in case["messages"]] == ["Looks like a scam"]
+
+
+def test_a_report_may_use_the_category_other(api: TestClient, buyer: Account, event: Event) -> None:
+    assert report(api, buyer, event, category="other").status_code == 201
+
+
+def test_a_report_needs_an_event_id(api: TestClient, buyer: Account) -> None:
+    response = api.post(
+        "/support/cases",
+        json={"kind": "report", "category": "event", "body": "Scam"},
+        headers=buyer.headers,
+    )
+
+    assert response.status_code == 422
+
+
+@pytest.mark.parametrize("category", ["payment", "refund", "ticket", "account", "seating"])
+def test_a_report_only_takes_the_category_event_or_other(
+    api: TestClient, buyer: Account, event: Event, category: str
+) -> None:
+    assert report(api, buyer, event, category=category).status_code == 422
+
+
+def test_a_report_takes_no_order_or_ticket(
+    api: TestClient, db_session: Session, buyer: Account, event: Event
+) -> None:
+    order, ticket = order_for(db_session, buyer, event)
+
+    assert report(api, buyer, event, order_id=str(order.id)).status_code == 422
+    assert report(api, buyer, event, ticket_id=str(ticket.id)).status_code == 422
+
+
+def test_only_a_published_public_event_can_be_reported(
+    api: TestClient, db_session: Session, buyer: Account, organizer: Account
+) -> None:
+    assert organizer.organizer is not None
+    draft = create_event(db_session, organizer.organizer, status=EventStatus.DRAFT)
+    private = create_event(db_session, organizer.organizer)
+    private.visibility = EventVisibility.PRIVATE
+    db_session.flush()
+    unlisted = create_event(db_session, organizer.organizer)
+    unlisted.visibility = EventVisibility.UNLISTED
+    db_session.flush()
+
+    assert report(api, buyer, draft).status_code == 404
+    assert report(api, buyer, private).status_code == 404
+    assert report(api, buyer, unlisted).status_code == 201
+    unknown = api.post(
+        "/support/cases",
+        json={"kind": "report", "category": "event", "body": "x", "event_id": str(uuid.uuid4())},
+        headers=buyer.headers,
+    )
+    assert unknown.status_code == 404
+
+
+def test_the_events_organizer_never_sees_a_report(
+    api: TestClient, buyer: Account, organizer: Account, admin: Account, event: Event
+) -> None:
+    case = report(api, buyer, event).json()
+    assert say(api, admin, case["id"], "We are looking into it").status_code == 201
+
+    for params in ({}, {"kind": "report"}, {"kind": "attendee"}):
+        assert case["id"] not in case_ids(api, organizer, **params)
+    assert get_case(api, organizer, case["id"]).status_code == 404
+    assert say(api, organizer, case["id"]).status_code == 404
+    assert set_status(api, organizer, case["id"], "resolved").status_code == 404
+    assert (
+        api.post(f"/support/cases/{case['id']}/assign", headers=organizer.headers).status_code
+        == 404
+    )
+
+
+def test_a_report_leaves_no_trace_in_the_organizers_event_timeline(
+    api: TestClient, buyer: Account, organizer: Account, admin: Account, event: Event
+) -> None:
+    case = report(api, buyer, event).json()
+    say(api, admin, case["id"], "Checking")
+    set_status(api, admin, case["id"], "resolved")
+
+    timeline = api.get(f"/events/{event.id}/timeline", headers=organizer.headers).json()
+
+    assert case["id"] not in {item["entity_id"] for item in timeline["items"]}
+
+
+def test_an_admin_finds_reports_with_the_kind_filter(
+    api: TestClient, buyer: Account, organizer: Account, admin: Account, event: Event
+) -> None:
+    reported = report(api, buyer, event).json()["id"]
+    attendee = attendee_case(api, buyer, event)["id"]
+    organizers = open_case(api, organizer, kind="organizer")["id"]
+
+    assert reported in case_ids(api, admin, kind="report")
+    assert attendee not in case_ids(api, admin, kind="report")
+    assert organizers not in case_ids(api, admin, kind="report")
+    assert reported not in case_ids(api, admin, kind="attendee")
+    assert reported not in case_ids(api, admin, kind="organizer")
+
+
+def test_a_plain_user_cannot_read_someone_elses_report(
+    api: TestClient, make_account: Callable[..., Account], buyer: Account, event: Event
+) -> None:
+    case = report(api, buyer, event).json()
+
+    assert get_case(api, make_account(), case["id"]).status_code == 404
+    assert get_case(api, buyer, case["id"]).status_code == 200  # the reporter
+
+
+def test_the_reporter_sees_their_report_and_the_admins_reply(
+    api: TestClient, db_session: Session, buyer: Account, admin: Account, event: Event
+) -> None:
+    case = report(api, buyer, event).json()
+
+    assert case["id"] in case_ids(api, buyer, "/support/cases")
+    assert say(api, admin, case["id"], "Thanks, we checked it").status_code == 201
+    detail = get_case(api, buyer, case["id"]).json()
+
+    assert detail["status"] == "waiting_customer" and detail["assignee_id"] == str(admin.user.id)
+    assert support_notifications(db_session, buyer) == ["support_reply"]
+
+
+def test_an_admin_resolves_a_report_and_can_still_suspend_the_event(
+    api: TestClient, buyer: Account, admin: Account, event: Event
+) -> None:
+    case = report(api, buyer, event).json()
+
+    assert set_status(api, admin, case["id"], "resolved").json()["status"] == "resolved"
+    suspended = api.post(f"/admin/events/{event.id}/suspend", headers=admin.headers)
+    assert suspended.status_code == 200, suspended.text
+
+
+def test_a_second_open_report_about_the_same_event_is_409(
+    api: TestClient, buyer: Account, admin: Account, event: Event
+) -> None:
+    first = report(api, buyer, event).json()
+
+    assert report(api, buyer, event).status_code == 409
+    # Still unresolved while the admin has answered and waits for the reporter.
+    say(api, admin, first["id"], "More details please")
+    assert report(api, buyer, event, category="other").status_code == 409
+
+
+def test_reports_about_other_events_or_from_other_users_are_fine(
+    api: TestClient,
+    db_session: Session,
+    make_account: Callable[..., Account],
+    buyer: Account,
+    organizer: Account,
+    event: Event,
+) -> None:
+    assert organizer.organizer is not None
+    other_event = create_event(db_session, organizer.organizer)
+    report(api, buyer, event)
+
+    assert report(api, buyer, other_event).status_code == 201
+    assert report(api, make_account(), event).status_code == 201
+
+
+def test_after_a_report_is_resolved_the_user_may_report_again(
+    api: TestClient, buyer: Account, admin: Account, event: Event
+) -> None:
+    first = report(api, buyer, event).json()
+    set_status(api, admin, first["id"], "resolved")
+
+    assert report(api, buyer, event).status_code == 201
+
+
+def test_a_report_does_not_block_ordinary_cases_about_the_event(
+    api: TestClient, buyer: Account, event: Event
+) -> None:
+    report(api, buyer, event)
+
+    assert attendee_case(api, buyer, event)["kind"] == "attendee"

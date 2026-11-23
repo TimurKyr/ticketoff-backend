@@ -22,7 +22,7 @@ router = APIRouter(prefix="/support", tags=["support"])
     "/cases",
     response_model=CaseDetailOut,
     status_code=status.HTTP_201_CREATED,
-    summary="Open a support case (the first message is the case text)",
+    summary="Open a support case or report an event (the first message is the text)",
 )
 def open_case(payload: CaseCreate, user: CurrentUser, session: SessionDep) -> CaseDetailOut:
     return service.open_case(session, user, payload)
@@ -42,7 +42,8 @@ def list_my_cases(
 @router.get(
     "/inbox",
     response_model=CasePage,
-    summary="Cases I handle, oldest first: my events' attendee cases, or all cases for an admin",
+    summary="Cases I handle, oldest first: my events' attendee cases, or all cases "
+    "(and reports, kind=report) for an admin",
 )
 def list_inbox(
     user: CurrentUser,

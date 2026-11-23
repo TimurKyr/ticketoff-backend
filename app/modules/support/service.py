@@ -4,6 +4,8 @@ Who sees and handles a case follows its kind, with no new roles:
 - an attendee case (a ticket buyer asking about an event) is handled by that event's
   organizer, who is not an admin;
 - an organizer case (an organizer asking the platform) is handled by a platform admin;
+- a report about an event (BE-27) is handled by platform admins only, so the event's
+  organizer cannot see it, not in the inbox, by id or in the event timeline;
 - a platform admin can handle every case.
 Anyone who is neither the opener nor a handler gets 404, so cases are never revealed.
 
@@ -116,13 +118,19 @@ def _detail(session: Session, case: SupportCase) -> CaseDetailOut:
 
 
 def _audit(session: Session, user: User, case: SupportCase, action: str, details: dict) -> None:
+    event_id = case.event_id
+    if case.kind == SupportKind.REPORT:
+        # The event's timeline is read by its organizer. A report is not for them, so its
+        # audit rows carry no event link (the event is in the details instead).
+        details = {**details, "event_id": str(case.event_id)}
+        event_id = None
     audit.log(
         session,
         actor_user_id=user.id,
         action_type=action,
         entity_type="support_case",
         entity_id=case.id,
-        event_id=case.event_id,
+        event_id=event_id,
         details=details,
     )
 
@@ -230,10 +238,26 @@ def _resolve_event_for_organizer(
     return event_ids.pop() if event_ids else None
 
 
+def _resolve_event_for_report(session: Session, user: User, data: CaseCreate) -> uuid.UUID:
+    """The event being reported: any published public or unlisted event (404 otherwise).
+
+    One unresolved report per user and event: the user row is locked first, so two reports
+    sent at the same moment cannot both pass (409 for the second).
+    """
+    assert data.event_id is not None  # CaseCreate refuses a report without one
+    events_service.get_public_event(session, data.event_id)
+    repository.lock_user(session, user.id)
+    if repository.has_open_report(session, user.id, data.event_id):
+        raise BusinessRuleError("You already have an open report about this event")
+    return data.event_id
+
+
 def open_case(session: Session, user: User, data: CaseCreate) -> CaseDetailOut:
     viewer = _viewer(session, user)
     if data.kind == SupportKind.ATTENDEE:
         event_id = _resolve_event_for_attendee(session, user, data)
+    elif data.kind == SupportKind.REPORT:
+        event_id = _resolve_event_for_report(session, user, data)
     else:
         event_id = _resolve_event_for_organizer(session, viewer, data)
     case = SupportCase(
