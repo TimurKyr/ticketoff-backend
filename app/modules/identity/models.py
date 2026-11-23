@@ -40,6 +40,8 @@ class User(Base):
     language = Column(String(2), nullable=False, default=Language.RU, server_default=text("'ru'"))
     # When the last verification email was queued (BE-18): the resend cooldown counts from it.
     email_verification_sent_at = Column(DateTime(timezone=True))
+    # When the last password reset email was queued (BE-25): its cooldown counts from it.
+    password_reset_sent_at = Column(DateTime(timezone=True))
 
     organizer_profile = relationship("OrganizerProfile", back_populates="user", uselist=False)
 

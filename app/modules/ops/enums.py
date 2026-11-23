@@ -18,6 +18,8 @@ class NotificationType(enum.StrEnum):
     ACCOUNT_VERIFICATION = "account_verification"
     PAYMENT_FAILED = "payment_failed"
     SUPPORT_STATUS = "support_status"
+    # BE-25 (same rule: ALTER TYPE in the migration).
+    PASSWORD_RESET = "password_reset"
 
 
 class SupportKind(enum.StrEnum):

@@ -1,3 +1,5 @@
+import hashlib
+import hmac
 import uuid
 from datetime import UTC, datetime, timedelta
 
@@ -24,6 +26,8 @@ def verify_password(password: str, password_hash: str) -> bool:
 ACCESS_TOKEN_TYPE = "access"
 EMAIL_VERIFICATION_TOKEN_TYPE = "email_verification"
 EMAIL_VERIFICATION_TTL = timedelta(hours=24)
+PASSWORD_RESET_TOKEN_TYPE = "password_reset"
+PASSWORD_RESET_TTL = timedelta(hours=1)
 
 
 def _encode(claims: dict, expires_at: datetime) -> str:
@@ -86,3 +90,36 @@ def decode_email_verification_token(token: str) -> tuple[uuid.UUID, str] | None:
         return uuid.UUID(claims["sub"]), claims["email"]
     except ValueError:
         return None
+
+
+def _password_fingerprint(password_hash: str) -> str:
+    """A short digest of the current password hash. It goes into the reset token, so the token
+    stops working the moment the password changes (a reset link can be used only once)."""
+    return hashlib.sha256(password_hash.encode()).hexdigest()[:16]
+
+
+def create_password_reset_token(user_id: uuid.UUID, password_hash: str) -> str:
+    """A 1 h link token for this user AND this password: once the password changes, it is void."""
+    return _encode(
+        {
+            "sub": str(user_id),
+            "pwd": _password_fingerprint(password_hash),
+            "typ": PASSWORD_RESET_TOKEN_TYPE,
+        },
+        datetime.now(UTC) + PASSWORD_RESET_TTL,
+    )
+
+
+def decode_password_reset_token(token: str) -> tuple[uuid.UUID, str] | None:
+    """(user id, password fingerprint) of a valid reset token, or None for anything else."""
+    claims = _decode(token, PASSWORD_RESET_TOKEN_TYPE)
+    if claims is None or not isinstance(claims.get("pwd"), str):
+        return None
+    try:
+        return uuid.UUID(claims["sub"]), claims["pwd"]
+    except ValueError:
+        return None
+
+
+def password_matches_reset_token(password_hash: str, fingerprint: str) -> bool:
+    return hmac.compare_digest(_password_fingerprint(password_hash), fingerprint)

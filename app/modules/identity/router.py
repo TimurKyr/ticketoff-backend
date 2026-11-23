@@ -7,10 +7,12 @@ from app.modules.identity import service
 from app.modules.identity.dependencies import ACCOUNT_SUSPENDED, CurrentUser, SessionDep
 from app.modules.identity.models import User
 from app.modules.identity.schemas import (
+    ForgotPasswordIn,
     MeOut,
     OrganizerProfileIn,
     OrganizerProfileOut,
     OrganizerProfileUpdate,
+    ResetPasswordIn,
     TokenOut,
     UserOut,
     UserRegister,
@@ -46,6 +48,26 @@ def verify_email(payload: VerifyEmailIn, session: SessionDep) -> User:
 )
 def resend_verification_email(user: CurrentUser, session: SessionDep) -> None:
     service.resend_verification_email(session, user)
+
+
+@router.post(
+    "/forgot-password",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Email me a password reset link",
+)
+def forgot_password(payload: ForgotPasswordIn, session: SessionDep) -> None:
+    """No login needed. Always 204, whether or not the address has an account."""
+    service.request_password_reset(session, payload.email)
+
+
+@router.post(
+    "/reset-password",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Set a new password from the emailed link",
+)
+def reset_password(payload: ResetPasswordIn, session: SessionDep) -> None:
+    """No login needed: the link's token says who it is. A link works once."""
+    service.reset_password(session, payload.token, payload.new_password)
 
 
 @router.post("/login", response_model=TokenOut)
