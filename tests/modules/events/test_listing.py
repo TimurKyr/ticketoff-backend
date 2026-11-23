@@ -187,10 +187,17 @@ def test_list_has_no_n_plus_one(
 ) -> None:
     def add_events(prefix: str, count: int) -> None:
         for n in range(count):
-            event = _event(db_session, organizer, f"{tag} {prefix} {n}")
+            # Each event its own organizer (BE-29): a per-event load of the organizer would
+            # add a query per event instead of hiding behind one shared profile.
+            owner = create_organizer(db_session)
+            owner.display_name = f"Org {prefix} {n}"
+            owner.contact_email = f"org-{prefix}-{n}@example.com"
+            owner.contact_phone = "+77010000000"
+            event = _event(db_session, owner, f"{tag} {prefix} {n}")
             create_free_ticket_type(db_session, event, name="Free")
             paid = create_ticket_type(db_session, event, name="Paid")
             create_order_item(db_session, paid, 2)
+        db_session.expire_all()  # start cold, as a fresh request would
 
     add_events("few", 2)
     with _count_queries(db_session) as few:
@@ -201,6 +208,12 @@ def test_list_has_no_n_plus_one(
         listed = _listed(session_api, q=f"{tag} many")
     assert len(listed) == 8
     assert all(item["price_from"] == 0 for item in listed.values())
+    assert sorted(item["organizer"]["display_name"] for item in listed.values()) == sorted(
+        f"Org many {n}" for n in range(8)
+    )
+    for item in listed.values():
+        assert set(item["organizer"]) == {"id", "display_name", "contact_email"}  # no phone
+        assert item["organizer"]["contact_email"].startswith("org-many-")
     assert len(many) == len(few)
 
 
@@ -219,3 +232,7 @@ def test_organizer_list_has_the_fields_too(
     assert item["price_from"] == 2500
     mine = session_api.get(f"/organizer/events/{event.id}", headers=headers).json()
     assert mine["availability"] == "available"
+    # BE-29: the organizer's own views carry the same public organizer block.
+    expected = {"id": str(organizer.id), "display_name": organizer.display_name}
+    assert {k: item["organizer"][k] for k in expected} == expected
+    assert mine["organizer"]["id"] == str(organizer.id)

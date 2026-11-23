@@ -14,7 +14,13 @@ from app.common.errors import (
 from app.modules.identity import repository
 from app.modules.identity.enums import Language
 from app.modules.identity.models import OrganizerProfile, StaffAssignment, User
-from app.modules.identity.schemas import MeOut, UserOut
+from app.modules.identity.schemas import (
+    MeOut,
+    OrganizerProfileIn,
+    OrganizerProfileOut,
+    OrganizerProfileUpdate,
+    UserOut,
+)
 from app.modules.identity.security import (
     EMAIL_VERIFICATION_TTL,
     create_email_verification_token,
@@ -123,31 +129,54 @@ def find_organizer_profile(session: Session, user: User) -> OrganizerProfile | N
     return session.scalar(select(OrganizerProfile).where(OrganizerProfile.user_id == user.id))
 
 
-def get_organizer_profile(session: Session, user: User) -> OrganizerProfile:
+def _profile_out(session: Session, profile: OrganizerProfile) -> OrganizerProfileOut:
+    return OrganizerProfileOut(
+        id=profile.id,
+        display_name=profile.display_name,
+        contact_email=profile.contact_email,
+        contact_phone=profile.contact_phone,
+        website=profile.website,
+        verification_status=profile.verification_status,
+        payout_status=repository.payout_status(session, profile.id),
+    )
+
+
+def _own_profile(session: Session, user: User) -> OrganizerProfile:
     profile = find_organizer_profile(session, user)
     if profile is None:
         raise NotFoundError("Organizer profile not found")
     return profile
 
 
-def create_organizer_profile(session: Session, user: User, display_name: str) -> OrganizerProfile:
+def get_organizer_profile(session: Session, user: User) -> OrganizerProfileOut:
+    return _profile_out(session, _own_profile(session, user))
+
+
+def create_organizer_profile(
+    session: Session, user: User, data: OrganizerProfileIn
+) -> OrganizerProfileOut:
     if find_organizer_profile(session, user) is not None:
         raise BusinessRuleError("Organizer profile already exists")
-    profile = OrganizerProfile(user_id=user.id, display_name=display_name)
+    profile = OrganizerProfile(user_id=user.id, **data.model_dump())
     session.add(profile)
     try:
         session.commit()
     except IntegrityError as exc:  # unique user_id: two requests at the same time
         session.rollback()
         raise BusinessRuleError("Organizer profile already exists") from exc
-    return profile
+    return _profile_out(session, profile)
 
 
-def update_organizer_profile(session: Session, user: User, display_name: str) -> OrganizerProfile:
-    profile = get_organizer_profile(session, user)
-    profile.display_name = display_name
+def update_organizer_profile(
+    session: Session, user: User, data: OrganizerProfileUpdate
+) -> OrganizerProfileOut:
+    """Only the fields that were sent change; an explicit null clears a contact. Always the
+    caller's own profile: there is no profile id in the path, so nobody edits another's."""
+    profile = _own_profile(session, user)
+    for name, value in data.model_dump(exclude_unset=True).items():
+        setattr(profile, name, value)
     session.commit()
-    return profile
+    return _profile_out(session, profile)
 
 
 def get_me(session: Session, user: User) -> MeOut:

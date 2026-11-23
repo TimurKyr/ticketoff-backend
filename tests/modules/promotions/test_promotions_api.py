@@ -293,6 +293,8 @@ def test_check_code_is_case_insensitive(
         "campaign_name": "Spring",
         "discount_type": "percent",
         "discount_value": 20,
+        # BE-29: a campaign of every ticket type lists none; no items, no discount fields.
+        "ticket_type_ids": [],
     }
 
 

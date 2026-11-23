@@ -46,6 +46,18 @@ class User(Base):
 
 class OrganizerProfile(Base):
     __tablename__ = "organizer_profiles"
+    # Formats are validated in the API (schemas.py); these keep the stored forms honest too.
+    __table_args__ = (
+        CheckConstraint(
+            "contact_phone IS NULL OR contact_phone ~ '^\\+[0-9]{10,15}$'",
+            name="contact_phone_format",
+        ),
+        CheckConstraint("website IS NULL OR website ~ '^https?://'", name="website_http"),
+        CheckConstraint(
+            "contact_email IS NULL OR contact_email = lower(contact_email)",
+            name="contact_email_lowercase",
+        ),
+    )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id = Column(
@@ -60,6 +72,11 @@ class OrganizerProfile(Base):
         nullable=False,
         default=VerificationStatus.UNVERIFIED,
     )
+    # Contacts shown to buyers (BE-29), all optional. contact_email is public on events;
+    # contact_phone is never shown publicly. Stored forms: lower-case email, "+" and digits.
+    contact_email = Column(String(254))
+    contact_phone = Column(String(16))
+    website = Column(String(255))
 
     user = relationship("User", back_populates="organizer_profile")
 

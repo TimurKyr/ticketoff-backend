@@ -143,6 +143,16 @@ class CalendarLinks(BaseModel):
     )
 
 
+class EventOrganizerOut(BaseModel):
+    """Who runs the event, as buyers see it. Never the phone, payout or verification data."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    display_name: str
+    contact_email: str | None
+
+
 class EventOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -176,6 +186,13 @@ class EventOut(BaseModel):
         ),
     )
     calendar_links: CalendarLinks
+    # Read from Event.organizer_public (set by annotate_on_sale), sent as "organizer".
+    organizer: EventOrganizerOut | None = Field(
+        default=None,
+        validation_alias="organizer_public",
+        serialization_alias="organizer",
+        description="Who runs the event: display name and public contact email",
+    )
 
 
 class EventPage(BaseModel):

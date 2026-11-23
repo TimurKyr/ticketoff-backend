@@ -49,7 +49,12 @@ def make_venue(db: Session) -> Callable[..., Venue]:
 
 @pytest.fixture
 def org(db: Session) -> Headers:
-    user = User(email=f"{uuid.uuid4().hex}@example.com", password_hash=hash_password("x" * 12))
+    # Verified: publishing needs a confirmed email since #35 (the factory default too).
+    user = User(
+        email=f"{uuid.uuid4().hex}@example.com",
+        password_hash=hash_password("x" * 12),
+        email_verified=True,
+    )
     db.add(user)
     db.flush()
     db.add(OrganizerProfile(user_id=user.id, display_name="Organizer"))

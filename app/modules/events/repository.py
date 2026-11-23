@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from app.modules.events.enums import EventStatus, EventVisibility
 from app.modules.events.models import Event, Venue
 from app.modules.events.schemas import EventBucket
+from app.modules.identity.models import OrganizerProfile
 from app.modules.orders.models import Order, OrderItem, TicketType
 from app.modules.orders.repository import (
     checkout_hold,
@@ -130,6 +131,28 @@ def list_for_organizer(
     elif bucket == EventBucket.UPCOMING:
         stmt = stmt.where(not_closed, Event.start_at > now)
     return _page(session, stmt.order_by(Event.start_at.desc(), Event.id.asc()), limit, offset)
+
+
+@dataclass(frozen=True)
+class PublicOrganizer:
+    """The organizer fields EventOut shows publicly (no phone, payout or verification)."""
+
+    id: uuid.UUID
+    display_name: str
+    contact_email: str | None
+
+
+def public_organizers(
+    session: Session, organizer_ids: Iterable[uuid.UUID]
+) -> dict[uuid.UUID, PublicOrganizer]:
+    """The public fields of these organizers, in one query (only the needed columns)."""
+    ids = set(organizer_ids)
+    if not ids:
+        return {}
+    stmt = select(
+        OrganizerProfile.id, OrganizerProfile.display_name, OrganizerProfile.contact_email
+    ).where(OrganizerProfile.id.in_(ids))
+    return {row[0]: PublicOrganizer(*row) for row in session.execute(stmt)}
 
 
 @dataclass(frozen=True)

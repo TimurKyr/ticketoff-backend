@@ -46,3 +46,35 @@ def test_png_encodes_exactly_the_token() -> None:
 
 def test_png_differs_per_token() -> None:
     assert render_qr_png("pc1.aaaa") != render_qr_png("pc1.bbbb")
+
+
+# --- BE-29: the discount only from the items the campaign applies to ---
+
+
+@pytest.mark.parametrize(
+    ("kind", "value", "total", "eligible", "expected"),
+    [
+        # 20% of the matching 10 000, not of the whole 25 000.
+        (DiscountType.PERCENT, 20, 25000, 10000, 2000),
+        (DiscountType.PERCENT, 15, 25000, 999, 149),  # same rounding (down) as before
+        # Fixed: at most the matching subtotal, even if the order is bigger.
+        (DiscountType.FIXED, 3000, 25000, 10000, 3000),
+        (DiscountType.FIXED, 15000, 25000, 10000, 10000),
+        # The whole-order rule still holds: the buyer pays at least 1 KZT.
+        (DiscountType.PERCENT, 100, 10000, 10000, 9999),
+        (DiscountType.FIXED, 50000, 10000, 10000, 9999),
+        (DiscountType.PERCENT, 50, 25000, 0, 0),  # nothing matching, nothing off
+    ],
+)
+def test_discount_for_eligible_subtotal(
+    kind: DiscountType, value: int, total: int, eligible: int, expected: int
+) -> None:
+    assert discount_for(campaign(kind, value), total, eligible) == expected  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("total", [0, 1, 999, 20000])
+@pytest.mark.parametrize("kind", [DiscountType.PERCENT, DiscountType.FIXED])
+def test_eligible_equal_to_total_is_todays_rule(kind: DiscountType, total: int) -> None:
+    # A campaign of every type: eligible subtotal == total gives exactly the old discount.
+    c = campaign(kind, 30 if kind == DiscountType.PERCENT else 3000)
+    assert discount_for(c, total, total) == discount_for(c, total)  # type: ignore[arg-type]
