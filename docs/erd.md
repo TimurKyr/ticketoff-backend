@@ -272,7 +272,7 @@ erDiagram
 ### Ops & Support
 - **CheckInRecord** — скан на входе; поддерживает отмену (`is_reversed`).
 - **Notification** — исходящее уведомление. `channel`: `email` · `in_app`.
-- **SupportCase** — тред поддержки. `kind`: `attendee` · `organizer`. `status`: `open` · `in_progress` · `waiting_customer` · `resolved`.
+- **SupportCase** — тред поддержки. `kind`: `attendee` · `organizer` · `report` (жалоба на событие, видит только platform admin). `status`: `open` · `in_progress` · `waiting_customer` · `resolved`.
 - **SupportMessage** — сообщение внутри кейса.
 
 ### Promotions

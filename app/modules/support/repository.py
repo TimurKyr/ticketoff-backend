@@ -1,7 +1,7 @@
 import uuid
 from dataclasses import dataclass
 
-from sqlalchemy import ColumnElement, func, select
+from sqlalchemy import ColumnElement, exists, func, select
 from sqlalchemy.orm import Session
 
 from app.modules.events.models import Event
@@ -127,6 +127,25 @@ def list_inbox(
     if kind is not None:
         filters.append(SupportCase.kind == kind)
     return _page(session, filters, newest_first=False, limit=limit, offset=offset)
+
+
+def lock_user(session: Session, user_id: uuid.UUID) -> None:
+    """Lock the user's row (FOR UPDATE) until the commit: two reports of one user run one
+    after the other, so the second one sees the first."""
+    session.execute(select(User.id).where(User.id == user_id).with_for_update())
+
+
+def has_open_report(session: Session, user_id: uuid.UUID, event_id: uuid.UUID) -> bool:
+    """An unresolved report of this user about this event (open, in progress or waiting)."""
+    stmt = select(
+        exists().where(
+            SupportCase.opened_by == user_id,
+            SupportCase.kind == SupportKind.REPORT,
+            SupportCase.event_id == event_id,
+            SupportCase.status != SupportStatus.RESOLVED,
+        )
+    )
+    return bool(session.scalar(stmt))
 
 
 def organizer_id_of(session: Session, user_id: uuid.UUID) -> uuid.UUID | None:
