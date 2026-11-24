@@ -509,6 +509,51 @@ def test_organizer_list_buckets(
     assert titles("cancelled") == {"Cancelled"}
 
 
+def test_organizer_buckets_order(
+    client: TestClient, org: Headers, db: Session, venue: Venue
+) -> None:
+    """BE-37 (UX #22): upcoming and active soonest first, completed and cancelled newest
+    first, everything together newest first."""
+    now = datetime.now(UTC)
+    days = {
+        "Up +20": 20,
+        "Up +5": 5,
+        "Up +10": 10,
+        "Past -10": -10,
+        "Past -2": -2,
+        "Past -30": -30,
+        "Cancelled +3": 3,
+        "Cancelled +15": 15,
+    }
+    for title, offset in days.items():
+        event = _create(client, org, venue, title=title)
+        row = db.get(Event, uuid.UUID(event["id"]))
+        row.start_at = now + timedelta(days=offset)
+        row.end_at = row.start_at + timedelta(hours=2)
+        row.registration_closes_at = None
+        if title.startswith("Cancelled"):
+            row.status = EventStatus.CANCELLED
+    for title, start in (("Active -3h", -3), ("Active -1h", -1)):
+        event = _create(client, org, venue, title=title)
+        row = db.get(Event, uuid.UUID(event["id"]))
+        row.start_at = now + timedelta(hours=start)
+        row.end_at = now + timedelta(hours=5)
+        row.registration_closes_at = None
+    db.commit()
+
+    def titles(bucket: str | None = None) -> list[str]:
+        params = {"bucket": bucket} if bucket else {}
+        response = client.get("/organizer/events", params=params, headers=org)
+        assert response.status_code == 200
+        return [e["title"] for e in response.json()["items"]]
+
+    assert titles("upcoming") == ["Up +5", "Up +10", "Up +20"]
+    assert titles("active") == ["Active -3h", "Active -1h"]
+    assert titles("completed") == ["Past -2", "Past -10", "Past -30"]
+    assert titles("cancelled") == ["Cancelled +15", "Cancelled +3"]
+    assert titles()[:3] == ["Up +20", "Cancelled +15", "Up +10"]
+
+
 def test_organizer_can_open_own_event_in_any_status(
     client: TestClient, org: Headers, other_org: Headers, venue: Venue
 ) -> None:
