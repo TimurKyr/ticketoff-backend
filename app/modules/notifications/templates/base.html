@@ -5,7 +5,7 @@
     <p style="margin:0 0 16px;font-size:18px;font-weight:bold;">ticketoff</p>
 {% block body %}{% endblock %}
     <p style="margin:24px 0 0;color:#6b7280;font-size:12px;">
-      {%+ if language == "en" %}This is an automated email from ticketoff. Payments on ticketoff are simulated.{% else %}Это автоматическое письмо ticketoff. Оплата на ticketoff симулируется.{% endif %}
+      {%+ if language == "en" %}This is an automated email from ticketoff. Payments on ticketoff are simulated.{% elif language == "kk" %}Бұл — ticketoff-тың автоматты хаты. ticketoff-тағы төлемдер симуляция болып табылады.{% else %}Это автоматическое письмо ticketoff. Оплата на ticketoff симулируется.{% endif %}
     </p>
   </div>
 </body>

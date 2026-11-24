@@ -12,6 +12,7 @@ class Language(enum.StrEnum):
 
     RU = "ru"
     EN = "en"
+    KK = "kk"  # BE-28
 
 
 class VerificationStatus(enum.StrEnum):

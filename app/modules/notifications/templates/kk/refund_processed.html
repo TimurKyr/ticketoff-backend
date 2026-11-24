@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block body %}
+    <p>Ұйымдастырушы тапсырысыңыз бойынша қаражатты қайтарды.</p>
+    <h2 style="margin:16px 0 4px;font-size:20px;">{{ event_title }}</h2>
+    <p style="margin:0;">{{ starts_at | local_dt(tz_name) }}</p>
+    <p><strong>Қайтарылған сома: {{ amount_kzt | money }}</strong>{% if reason %}<br>Себебі: {{ reason }}{% endif %}</p>
+    <p>Бұл тапсырыстың билеттері енді жарамсыз.</p>
+    <p><a href="{{ order_url }}">Тапсырысты ашу</a></p>
+{% endblock %}

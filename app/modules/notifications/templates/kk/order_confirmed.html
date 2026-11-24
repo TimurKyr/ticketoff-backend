@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block body %}
+    <p>{% if is_paid %}Тапсырысыңыз төленді.{% else %}Тіркелуіңіз расталды.{% endif %}</p>
+    <h2 style="margin:16px 0 4px;font-size:20px;">{{ event_title }}</h2>
+    <p style="margin:0;">{{ starts_at | local_dt(tz_name) }}<br>{{ venue_line }}</p>
+    <ul>
+{% for t in tickets %}
+      <li>{{ t.ticket_type }}: {{ t.guest_name }}</li>
+{% endfor %}
+    </ul>
+{% if is_paid %}
+    <p>Сомасы: {{ total_kzt | money }}{% if discount_kzt %}<br>Жеңілдік: {{ discount_kzt | money }}{% endif %}<br><strong>Төленді: {{ paid_kzt | money }}</strong></p>
+{% endif %}
+{% if tickets_url %}
+    <p>Билеттер көп болғандықтан, хатқа тіркелмеді. <a href="{{ tickets_url }}">Барлық билеттер</a></p>
+{% else %}
+    <p>Билеттер хатқа тіркелген (QR-коды бар PDF). Кіре берісте QR-кодты көрсетіңіз.</p>
+{% endif %}
+    <p><a href="{{ order_url }}">Тапсырысты ашу</a> · <a href="{{ calendar_url }}">Күнтізбеге қосу (.ics)</a></p>
+{% endblock %}

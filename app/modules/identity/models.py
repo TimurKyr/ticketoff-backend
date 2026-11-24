@@ -27,7 +27,7 @@ from app.modules.identity.enums import (
 class User(Base):
     __tablename__ = "users"
     # Names expand to ck_users_<name> via the naming convention.
-    __table_args__ = (CheckConstraint("language IN ('ru', 'en')", name="language_supported"),)
+    __table_args__ = (CheckConstraint("language IN ('ru', 'en', 'kk')", name="language_supported"),)
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     email = Column(String, unique=True, nullable=False, index=True)

@@ -1,0 +1,6 @@
+{% extends "base.html" %}
+{% block body %}
+{% set labels = {"open": "ашық", "in_progress": "жұмыста", "waiting_customer": "сіздің жауабыңызды күтуде", "resolved": "шешілді"} %}
+    <p>«{{ case_subject }}» өтінішіңіздің күйі өзгерді: <strong>{{ labels[status] }}</strong>.</p>
+    <p><a href="{{ case_url }}">Өтінішті ашу</a></p>
+{% endblock %}

@@ -13,11 +13,13 @@ import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Literal
 
 from sqlalchemy.orm import Session
 
 from app.modules.events.enums import EventStatus
 from app.modules.events.models import Event, Venue
+from app.modules.identity.models import OrganizerProfile, User
 from app.modules.notifications import links, repository
 from app.modules.notifications.attachments import ticket_files
 from app.modules.notifications.service import notify
@@ -203,3 +205,39 @@ def event_updated(session: Session, event: Event, before: Schedule) -> None:
             context,
             payload={"event_id": str(event.id), "fields": [c["field"] for c in changes]},
         )
+
+
+# --- organizer: payout and paid sales (BE-28) ---
+
+PayoutStage = Literal["account_verified", "sales_activated"]
+
+
+def payout_status(
+    session: Session,
+    organizer: OrganizerProfile,
+    stage: PayoutStage,
+    event: Event | None = None,
+) -> None:
+    """Tell the organizer that the (simulated) verification and payout account are ready
+    ("account_verified", organizer-wide), or that paid sales of `event` are on
+    ("sales_activated"). The wording says it is a simulation.
+
+    The caller fires it only on a real change (payments.service), so repeating a step never
+    sends twice. Recipient: the profile's user (the organizer), never staff or attendees.
+    """
+    user = session.get(User, organizer.user_id)
+    if user is None:
+        return
+    if stage == "sales_activated":
+        if event is None:
+            raise ValueError("sales_activated needs the event")
+        context = {
+            "stage": stage,
+            "event_title": event.title,
+            "link_url": links.organizer_event_url(event.id),
+        }
+        payload = {"stage": stage, "event_id": str(event.id)}
+    else:
+        context = {"stage": stage, "event_title": None, "link_url": links.organizer_url()}
+        payload = {"stage": stage}
+    notify(session, user, NotificationType.PAYOUT_STATUS, context, payload=payload)

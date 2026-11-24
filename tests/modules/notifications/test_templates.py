@@ -100,6 +100,16 @@ CONTEXTS: dict[NotificationType, dict] = {
         "status": SupportStatus.WAITING_CUSTOMER.value,
         "case_url": "https://ticketoff.store/support/cases/7d0c8a4e-1b2f-4c3d-9e8f-0a1b2c3d4e5f",
     },
+    # BE-28
+    NotificationType.SUPPORT_ASSIGNMENT: {
+        "case_subject": "Не пришёл билет",
+        "case_url": "https://ticketoff.store/support/cases/7d0c8a4e-1b2f-4c3d-9e8f-0a1b2c3d4e5f",
+    },
+    NotificationType.PAYOUT_STATUS: {
+        "stage": "sales_activated",
+        "event_title": "Джаз в парке",
+        "link_url": "https://ticketoff.store/organizer/events/0b9d7c1e-0000-4000-8000-000000000001",
+    },
 }
 
 # What each rendered email must say: (subject, phrases in the text), per language.
@@ -217,9 +227,9 @@ def test_every_template_renders_in_both_languages(type_: NotificationType, langu
     assert "{{" not in email.text + email.html and "{%" not in email.text + email.html
 
 
-def test_every_type_we_send_has_all_files_in_both_languages() -> None:
+def test_every_type_we_send_has_all_files_in_every_language() -> None:
     sent = set(CONTEXTS)
-    for language in ("ru", "en"):
+    for language in ("ru", "en", "kk"):  # kk since BE-28
         for type_ in sent:
             for suffix in (".subject.txt", ".txt", ".html"):
                 assert (TEMPLATES_DIR / language / f"{type_.value}{suffix}").is_file()

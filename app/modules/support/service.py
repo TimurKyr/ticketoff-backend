@@ -192,6 +192,22 @@ def _notify_customer(
     )
 
 
+def _notify_assignment(session: Session, actor: User, case: SupportCase) -> None:
+    """Tell the customer their case was taken (BE-28). Never who took it; nothing when the
+    customer is the one acting (a user's own action does not notify them)."""
+    if actor.id == case.opened_by:
+        return
+    customer = repository.get_user(session, case.opened_by)
+    if customer is None:
+        return
+    notifications.notify_support_assignment(
+        session,
+        customer,
+        case_id=case.id,
+        case_subject=case.category.value.replace("_", " ").capitalize(),
+    )
+
+
 def _assign(session: Session, user: User, case: SupportCase) -> None:
     case.assignee_id = user.id
     _audit(session, user, case, "support.case_assigned", {"assignee_id": str(user.id)})
@@ -415,10 +431,18 @@ def assign_to_me(session: Session, user: User, case_id: uuid.UUID) -> CaseDetail
         raise PermissionDeniedError("Only a handler of this case can take it")
     if case.assignee_id not in (None, user.id) and not viewer.is_admin:
         raise BusinessRuleError("This case is already taken by someone else")
+    newly_assigned = case.assignee_id is None
     if case.assignee_id != user.id:
         _assign(session, user, case)
-    if case.status == SupportStatus.OPEN:
-        _change_status(session, user, case, SupportStatus.IN_PROGRESS)
+    status_changed = case.status == SupportStatus.OPEN and _change_status(
+        session, user, case, SupportStatus.IN_PROGRESS
+    )
+    # One notification per action (BE-17/BE-28): nobody → someone is "your case was taken"
+    # (it also covers open → in progress); an admin taking over an already taken case
+    # changes nothing the customer needs to hear about.
+    if newly_assigned:
+        _notify_assignment(session, user, case)
+    elif status_changed:
         _notify_customer(session, user, case, status=case.status)
     session.commit()
     return _detail(session, case)

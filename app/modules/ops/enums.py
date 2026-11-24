@@ -20,6 +20,9 @@ class NotificationType(enum.StrEnum):
     SUPPORT_STATUS = "support_status"
     # BE-25 (same rule: ALTER TYPE in the migration).
     PASSWORD_RESET = "password_reset"
+    # BE-28 (same rule).
+    PAYOUT_STATUS = "payout_status"
+    SUPPORT_ASSIGNMENT = "support_assignment"
 
 
 class SupportKind(enum.StrEnum):

@@ -1,0 +1,6 @@
+{% extends "base.html" %}
+{% block body %}
+    <p>Қолдау қызметі «{{ case_subject }}» өтінішіңізге жауап берді:</p>
+    <blockquote style="margin:12px 0;padding:8px 12px;border-left:3px solid #d4d4d8;color:#374151;">{{ message_excerpt }}</blockquote>
+    <p><a href="{{ case_url }}">Өтінішті ашу</a></p>
+{% endblock %}

@@ -1,0 +1,11 @@
+{% if stage == "sales_activated" %}
+Paid sales are now on for "{{ event_title }}".
+This is a simulation: payments on ticketoff never charge real money.
+
+Event: {{ link_url }}
+{% else %}
+Your organizer verification and payout account are ready.
+This is a simulation: no real money is moved.
+
+You can now turn on paid sales for your events: {{ link_url }}
+{% endif %}

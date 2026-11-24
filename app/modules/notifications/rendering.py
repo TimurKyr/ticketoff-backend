@@ -18,6 +18,11 @@ Context each template needs (values are plain: str, int, bool, aware datetime, l
   password_reset        reset_url, expires_hours
   support_reply         case_subject, message_excerpt, case_url
   support_status        case_subject, status (SupportStatus value), case_url
+  support_assignment    case_subject, case_url (never who took the case)
+  payout_status         stage ("account_verified" | "sales_activated"), event_title (None
+                        for the account stage), link_url
+
+Languages: ru, en, kk. A template missing in the asked language falls back to ru.
 
 Links come from notifications.links.
 """

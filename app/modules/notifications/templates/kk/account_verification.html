@@ -1,0 +1,6 @@
+{% extends "base.html" %}
+{% block body %}
+    <p>ticketoff-та тіркелуді аяқтау үшін электрондық пошта мекенжайыңызды растаңыз.</p>
+    <p><a href="{{ verify_url }}" style="display:inline-block;padding:10px 16px;background:#111;color:#fff;border-radius:6px;text-decoration:none;">Email-ді растау</a></p>
+    <p style="color:#6b7280;font-size:13px;">Сілтеме {{ expires_hours }} сағат жарамды. Егер сіз тіркелмеген болсаңыз, бұл хатты елемеңіз.</p>
+{% endblock %}
