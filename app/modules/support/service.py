@@ -42,6 +42,7 @@ from app.modules.events import service as events_service
 from app.modules.identity.enums import SystemRole
 from app.modules.identity.models import User
 from app.modules.notifications import service as notifications
+from app.modules.notifications.rendering import support_category_label
 from app.modules.ops.enums import SupportKind, SupportStatus
 from app.modules.ops.models import SupportAttachment, SupportCase, SupportMessage
 from app.modules.support import attachments, repository, storage
@@ -174,8 +175,8 @@ def _notify_customer(
 ) -> None:
     """Tell the case's customer about a reply (`message`) or a status change (`status`).
 
-    Nothing when the customer is the one acting. The subject is the category label (the case
-    has no title of its own), e.g. "Payment".
+    Nothing when the customer is the one acting. The subject is the category label in the
+    customer's language (the case has no title of its own), e.g. "Возврат" / "Refund".
     """
     if actor.id == case.opened_by:
         return
@@ -186,7 +187,7 @@ def _notify_customer(
         session,
         customer,
         case_id=case.id,
-        case_subject=case.category.value.replace("_", " ").capitalize(),
+        case_subject=support_category_label(case.category, customer.language),
         message=message,
         status=status,
     )

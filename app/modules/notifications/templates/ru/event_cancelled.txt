@@ -2,6 +2,9 @@
 
 Событие: {{ event_title }}
 Было запланировано: {{ starts_at | local_dt(tz_name) }}
+{% if reason is defined and reason %}
+Причина: {{ reason }}
+{% endif %}
 
 {% if refund_kzt %}
 Мы полностью вернули оплату: {{ refund_kzt | money }}.

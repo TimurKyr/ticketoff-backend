@@ -547,6 +547,7 @@ def test_event_cancel_emails_each_affected_buyer_once(
     for o in (free, paid_a, paid_b):
         assert f"Заказ: {order_link(o.id)}" in email.text
     assert f"https://api.ticketoff.store/events/{event.id}/calendar.ics" in email.text
+    assert "Причина" not in email.text  # no reason given (BE-37)
 
     # Free registration only, in English: no refund line.
     [email] = emails.to(free_only.email)
@@ -557,6 +558,30 @@ def test_event_cancel_emails_each_affected_buyer_once(
     # A pending checkout the cascade cancelled: told, nothing refunded.
     [email] = emails.to(pending_only.email)
     assert "вернули" not in email.text and order_link(pending.id) in email.text
+
+
+def test_event_cancel_reason_is_in_the_email(
+    db_session: Session,
+    emails: RecordingEmailProvider,
+    owner: User,
+    event: Event,
+    free_type: TicketType,
+) -> None:
+    """BE-37: the organizer's reason, in each buyer's language; HTML-escaped in HTML."""
+    ru, en = buyer(db_session), buyer(db_session, Language.EN)
+    register(db_session, ru, free_type, 1)
+    register(db_session, en, free_type, 1)
+    emails.sent.clear()
+
+    payments_service.cancel_event_with_orders(
+        db_session, event, owner, reason="Площадка <закрыта> на ремонт"
+    )
+
+    [email] = emails.to(ru.email)
+    assert "Причина: Площадка <закрыта> на ремонт" in email.text
+    assert "Причина: Площадка &lt;закрыта&gt; на ремонт" in email.html
+    [email] = emails.to(en.email)
+    assert "Reason: Площадка <закрыта> на ремонт" in email.text
 
 
 def test_event_cancel_whose_commit_fails_sends_nothing(

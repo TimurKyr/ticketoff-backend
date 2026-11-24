@@ -401,8 +401,9 @@ def test_capacity_counts_the_whole_request(db_session: Session, buyer: User, eve
     standard = create_free_ticket_type(db_session, event, name="Standard")
     student = create_free_ticket_type(db_session, event, name="Student")
 
-    with pytest.raises(BusinessRuleError, match="Not enough capacity left"):
+    with pytest.raises(BusinessRuleError, match="Not enough capacity left") as error:
         register(db_session, buyer, event, registration((standard, 2), (student, 1)))
+    assert error.value.code == "NOT_ENOUGH_CAPACITY"  # BE-37: the web translates the code
 
 
 def test_no_capacity_means_unlimited(db_session: Session, buyer: User, event: Event) -> None:

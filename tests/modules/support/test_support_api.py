@@ -18,7 +18,7 @@ from app.core.db import engine, get_session
 from app.main import app
 from app.modules.events.enums import EventStatus, EventVisibility
 from app.modules.events.models import Event
-from app.modules.identity.enums import SystemRole
+from app.modules.identity.enums import Language, SystemRole
 from app.modules.identity.models import OrganizerProfile, User
 from app.modules.ops.enums import SupportCategory, SupportKind
 from app.modules.ops.models import Notification
@@ -567,6 +567,35 @@ def test_support_emails_and_notifications_point_to_the_case(
     support_rows = [r for r in rows if r.type.value.startswith("support_")]
     assert sorted(r.type.value for r in support_rows) == ["support_reply", "support_status"]
     assert all(r.payload == {"case_id": case["id"]} for r in support_rows)
+
+
+@pytest.mark.parametrize(
+    ("language", "category", "subject"),
+    [
+        (Language.RU, "refund", "Ответ поддержки: Возврат"),
+        (Language.EN, "refund", "Support replied: Refund"),
+        (Language.RU, "check_in", "Ответ поддержки: Вход на событие"),
+    ],
+)
+def test_support_email_subject_is_the_category_in_the_customer_language(
+    api: TestClient,
+    db_session: Session,
+    buyer: Account,
+    organizer: Account,
+    event: Event,
+    emails: RecordingEmailProvider,
+    language: Language,
+    category: str,
+    subject: str,
+) -> None:
+    """BE-37: not the raw enum value ("Refund" in a Russian email)."""
+    buyer.user.language = language
+    db_session.flush()
+    case = attendee_case(api, buyer, event, category=category)
+
+    say(api, organizer, case["id"], "Refund is on its way")
+
+    assert emails.to(buyer.user.email)[-1].subject == subject
 
 
 def test_a_customer_message_notifies_nobody(

@@ -305,6 +305,18 @@ def test_console_logs_bodies_only_locally(
     provider = notifications.get_provider()
 
     assert isinstance(provider, ConsoleEmailProvider) and provider._log_body is logs_body
+    # BE-37: the confirmation / reset link is logged locally only (no mailbox to open there).
+    assert provider._log_secrets is logs_body
+
+
+def test_console_provider_logs_a_secret_link_locally(caplog: pytest.LogCaptureFixture) -> None:
+    secret = EmailMessage(to="b@example.com", subject="Hi", text="token=abc", contains_secret=True)
+
+    with caplog.at_level(logging.INFO, logger="app.notifications"):
+        ConsoleEmailProvider(log_body=True, log_secrets=True).send(secret)
+        ConsoleEmailProvider(log_body=False, log_secrets=True).send(secret)  # body off wins
+
+    assert caplog.text.count("token=abc") == 1
 
 
 @pytest.mark.parametrize(

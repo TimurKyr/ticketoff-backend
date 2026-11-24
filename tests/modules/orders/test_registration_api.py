@@ -178,6 +178,7 @@ def test_sold_out_is_409(
 
     assert response.status_code == 409
     assert response.json()["detail"].startswith("Not enough tickets left")
+    assert response.json()["code"] == "NOT_ENOUGH_TICKETS"
 
 
 def test_assigned_seating_event_is_409(

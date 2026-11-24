@@ -49,11 +49,14 @@ class ConsoleEmailProvider:
 
     The body and the full address are logged only with log_body (local development). Anywhere
     else (a server left on console) only the recipient's domain and the subject are: a body
-    holds names and links. A body with a secret link (contains_secret) is never logged.
+    holds names and links. A body with a secret link (contains_secret: email confirmation,
+    password reset) is logged only with log_secrets too, which get_provider() sets for
+    ENVIRONMENT=local alone (BE-37): there it is the only way to follow the link.
     """
 
-    def __init__(self, log_body: bool = True) -> None:
+    def __init__(self, log_body: bool = True, log_secrets: bool = False) -> None:
         self._log_body = log_body
+        self._log_secrets = log_body and log_secrets
 
     def send(self, message: EmailMessage) -> None:
         files = ", ".join(f"{a.filename} ({len(a.content)} B)" for a in message.attachments)
@@ -67,7 +70,7 @@ class ConsoleEmailProvider:
             return
         body = (
             "[body not logged: it contains a secret link]"
-            if message.contains_secret
+            if message.contains_secret and not self._log_secrets
             else message.text
         )
         logger.info(

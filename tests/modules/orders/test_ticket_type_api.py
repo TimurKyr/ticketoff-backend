@@ -211,7 +211,10 @@ def test_capacity_sum_is_enforced_on_create(
     response = create(api, owner, event, paid(name="C", quantity_total=1))
 
     assert response.status_code == 409
-    assert response.json() == {"detail": "Total ticket quantity (101) exceeds event capacity (100)"}
+    assert response.json() == {
+        "detail": "Total ticket quantity (101) exceeds event capacity (100)",
+        "code": "TICKET_QUANTITY_EXCEEDS_CAPACITY",
+    }
 
 
 def test_capacity_counts_hidden_types(
@@ -223,7 +226,10 @@ def test_capacity_counts_hidden_types(
     response = create(api, owner, event, paid(name="Visible", quantity_total=41))
 
     assert response.status_code == 409
-    assert response.json() == {"detail": "Total ticket quantity (101) exceeds event capacity (100)"}
+    assert response.json() == {
+        "detail": "Total ticket quantity (101) exceeds event capacity (100)",
+        "code": "TICKET_QUANTITY_EXCEEDS_CAPACITY",
+    }
 
 
 def test_capacity_sum_is_enforced_on_patch(
@@ -236,7 +242,10 @@ def test_capacity_sum_is_enforced_on_patch(
     response = patch(api, owner, event, a["id"], {"quantity_total": 61})
 
     assert response.status_code == 409
-    assert response.json() == {"detail": "Total ticket quantity (101) exceeds event capacity (100)"}
+    assert response.json() == {
+        "detail": "Total ticket quantity (101) exceeds event capacity (100)",
+        "code": "TICKET_QUANTITY_EXCEEDS_CAPACITY",
+    }
 
 
 def test_lowering_is_allowed_when_already_over_capacity(

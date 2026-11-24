@@ -122,6 +122,26 @@ class EventUpdate(BaseModel):
         return self
 
 
+CANCEL_REASON_MAX_LENGTH = 500
+
+
+class EventCancel(BaseModel):
+    """Optional body of POST /events/{id}/cancel (BE-37): why the event is called off.
+
+    The reason goes into the event_cancelled email to buyers and into the audit row. Blank
+    text counts as no reason.
+    """
+
+    reason: str | None = Field(default=None, max_length=CANCEL_REASON_MAX_LENGTH)
+
+    @field_validator("reason")
+    @classmethod
+    def _blank_is_none(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return value.strip() or None
+
+
 class VenueOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

@@ -2,6 +2,9 @@ We're sorry: the event has been cancelled.
 
 Event: {{ event_title }}
 It was planned for: {{ starts_at | local_dt(tz_name) }}
+{% if reason is defined and reason %}
+Reason: {{ reason }}
+{% endif %}
 
 {% if refund_kzt %}
 We have refunded your payment in full: {{ refund_kzt | money }}.

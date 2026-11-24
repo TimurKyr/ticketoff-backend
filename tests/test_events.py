@@ -441,7 +441,9 @@ def test_capacity_cannot_drop_below_ticket_types(
     _add_type(client, org, event["id"], quantity_total=60)
     url = f"/events/{event['id']}"
 
-    assert client.patch(url, json={"capacity": 59}, headers=org).status_code == 409
+    too_low = client.patch(url, json={"capacity": 59}, headers=org)
+    assert too_low.status_code == 409
+    assert too_low.json()["code"] == "CAPACITY_BELOW_TICKET_QUANTITY"
     assert client.patch(url, json={"capacity": 60}, headers=org).json()["capacity"] == 60
     assert client.patch(url, json={"capacity": None}, headers=org).status_code == 200
 
@@ -468,6 +470,7 @@ def test_capacity_cannot_drop_below_tickets_sold(
     response = client.patch(url, json={"capacity": 20}, headers=org)
     assert response.status_code == 409
     assert "sold" in response.json()["detail"]
+    assert response.json()["code"] == "CAPACITY_BELOW_SOLD"
     assert client.patch(url, json={"capacity": 30}, headers=org).status_code == 200
 
 

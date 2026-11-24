@@ -3,6 +3,9 @@
     <p>К сожалению, событие отменено.</p>
     <h2 style="margin:16px 0 4px;font-size:20px;">{{ event_title }}</h2>
     <p style="margin:0;">Было запланировано: {{ starts_at | local_dt(tz_name) }}</p>
+{% if reason is defined and reason %}
+    <p style="margin:8px 0 0;">Причина: {{ reason }}</p>
+{% endif %}
 {% if refund_kzt %}
     <p><strong>Мы полностью вернули оплату: {{ refund_kzt | money }}.</strong></p>
 {% endif %}
