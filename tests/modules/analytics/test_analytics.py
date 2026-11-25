@@ -4,7 +4,8 @@ Every test reads one organizer's own events, so rows of other tests never leak i
 """
 
 import uuid
-from datetime import UTC, datetime, timedelta
+from dataclasses import dataclass
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
@@ -20,6 +21,7 @@ from app.modules.events.models import Event
 from app.modules.events.schemas import EventBucket
 from app.modules.identity.models import OrganizerProfile
 from app.modules.identity.security import create_access_token
+from app.modules.ops.models import CheckInRecord
 from app.modules.orders.enums import OrderStatus, TicketStatus
 from app.modules.orders.models import Attendee, Order, OrderItem, Ticket, TicketType
 from app.modules.payments import service as payments_service
@@ -592,3 +594,226 @@ def test_a_plain_user_is_403_and_no_login_is_401(
     ):
         assert api.get(path, headers=plain).status_code == 403
         assert api.get(path).status_code == 401
+
+
+# --- filters: period and ticket type (R-118) ---
+
+MAR = 2030, 3
+
+
+@dataclass
+class Sales:
+    """Three orders on different Almaty days, two ticket types (UTC+5 in Asia/Almaty).
+
+    a: 10 Mar 15:00, 1 VIP + 1 Standard, 12 000 - 1 200 promo = 10 800 paid
+       (VIP's share 9 000 and 1 000 of the discount, Standard's 1 800 and 200).
+    b: 11 Mar 01:00 (20:00 UTC on the 10th), 3 Standard, 6 000 paid, 2 scanned:
+       one on 11 Mar, one on 13 Mar.
+    c: 12 Mar 11:00, 1 VIP, 10 000 paid and refunded.
+    """
+
+    vip: TicketType
+    standard: TicketType
+    campaign: PromotionalCampaign
+
+
+@pytest.fixture
+def sales(db_session: Session, event: Event) -> Sales:
+    vip = create_ticket_type(db_session, event, name="VIP", price_kzt=10_000, quantity_total=10)
+    standard = create_ticket_type(
+        db_session, event, name="Standard", price_kzt=2_000, quantity_total=50
+    )
+    a = sale(
+        db_session,
+        event,
+        vip,
+        paid=10_800,
+        discount=1_200,
+        also=standard,
+        created_at=datetime(*MAR, 10, 10, 0, tzinfo=UTC),
+    )
+    b = sale(
+        db_session,
+        event,
+        standard,
+        quantity=3,
+        paid=6_000,
+        checked_in=2,
+        created_at=datetime(*MAR, 10, 20, 0, tzinfo=UTC),
+    )
+    sale(
+        db_session,
+        event,
+        vip,
+        status=OrderStatus.REFUNDED,
+        paid=10_000,
+        refunded=True,
+        created_at=datetime(*MAR, 12, 6, 0, tzinfo=UTC),
+    )
+    gate = create_user(db_session)
+    scanned = [t for item in b.items for t in item.tickets if t.status == TicketStatus.CHECKED_IN]
+    for ticket, day in zip(scanned, (11, 13), strict=True):
+        db_session.add(
+            CheckInRecord(
+                ticket_id=ticket.id,
+                event_admin_id=gate.id,
+                checked_in_at=datetime(*MAR, day, 5, 0, tzinfo=UTC),
+            )
+        )
+    # A reversed scan in the period never counts.
+    db_session.add(
+        CheckInRecord(
+            ticket_id=scanned[0].id,
+            event_admin_id=gate.id,
+            checked_in_at=datetime(*MAR, 11, 4, 0, tzinfo=UTC),
+            is_reversed=True,
+        )
+    )
+    db_session.flush()
+    return Sales(vip, standard, promo(db_session, event, "Spring", [(a, 1_200)]))
+
+
+def figures(detail) -> tuple[int, ...]:
+    e = detail.event
+    return (e.orders, e.tickets_sold, e.checked_in, e.gross_kzt, e.discounts_kzt, e.refunds_kzt)
+
+
+def days(detail) -> list[tuple]:
+    return [(d.day.day, d.orders, d.tickets_sold, d.sales_kzt) for d in detail.daily_sales]
+
+
+def campaign(detail) -> tuple[int, ...]:
+    (c,) = detail.campaigns
+    return (c.orders, c.tickets_sold, c.gross_kzt, c.discount_total_kzt, c.net_kzt)
+
+
+def test_without_filters_everything_counts(db_session: Session, event: Event, sales: Sales) -> None:
+    detail = service.get_event_analytics(db_session, event)
+
+    assert figures(detail) == (2, 5, 2, 26_800, 1_200, 10_000)
+    assert days(detail) == [(10, 1, 2, 10_800), (11, 1, 3, 6_000)]
+    assert [(t.name, t.sold, t.sales_kzt) for t in detail.ticket_types] == [
+        ("Standard", 4, 8_000),
+        ("VIP", 1, 10_000),
+    ]
+    assert campaign(detail) == (1, 2, 10_800, 1_200, 10_800)
+    assert (detail.event.tickets_total, detail.event.remaining) == (60, 55)
+
+
+def test_a_period_narrows_sales_money_and_check_ins(
+    db_session: Session, event: Event, sales: Sales
+) -> None:
+    eleventh = service.get_event_analytics(
+        db_session, event, from_date=date(*MAR, 11), to_date=date(*MAR, 11)
+    )
+    from_12th = service.get_event_analytics(db_session, event, from_date=date(*MAR, 12))
+    to_10th = service.get_event_analytics(db_session, event, to_date=date(*MAR, 10))
+
+    # Order b falls on the 11th in Almaty although it is the 10th in UTC.
+    assert figures(eleventh) == (1, 3, 1, 6_000, 0, 0)
+    assert days(eleventh) == [(11, 1, 3, 6_000)]
+    assert [(t.name, t.sold) for t in eleventh.ticket_types] == [("Standard", 3), ("VIP", 0)]
+    assert campaign(eleventh) == (0, 0, 0, 0, 0)
+    # The refund belongs to its order's day, so net = gross - refunds of the same orders.
+    assert figures(from_12th) == (0, 0, 1, 10_000, 0, 10_000)
+    assert from_12th.event.estimated_payout_kzt == 10_000 - 300 - 10_000
+    assert days(from_12th) == []
+    assert figures(to_10th) == (1, 2, 0, 10_800, 1_200, 0)
+    assert campaign(to_10th) == (1, 2, 10_800, 1_200, 10_800)
+    # Inventory is all-time whatever the period.
+    for detail in (eleventh, from_12th, to_10th):
+        assert (detail.event.tickets_total, detail.event.remaining) == (60, 55)
+        assert detail.event.percent_sold == round(100 * 5 / 60, 1)
+
+
+def test_a_ticket_type_narrows_every_figure_and_shares_mixed_orders(
+    db_session: Session, event: Event, sales: Sales
+) -> None:
+    vip = service.get_event_analytics(db_session, event, ticket_type_id=sales.vip.id)
+    standard = service.get_event_analytics(db_session, event, ticket_type_id=sales.standard.id)
+
+    assert figures(vip) == (1, 1, 0, 9_000 + 10_000, 1_000, 10_000)
+    assert figures(standard) == (2, 4, 2, 1_800 + 6_000, 200, 0)
+    # The two types add up to the whole event.
+    assert vip.event.gross_kzt + standard.event.gross_kzt == 26_800
+    assert days(vip) == [(10, 1, 1, 9_000)]
+    assert days(standard) == [(10, 1, 1, 1_800), (11, 1, 3, 6_000)]
+    assert [t.name for t in vip.ticket_types] == ["VIP"]
+    assert campaign(vip) == (1, 1, 9_000, 1_000, 9_000)
+    assert campaign(standard) == (1, 1, 1_800, 200, 1_800)
+    assert (vip.event.tickets_total, vip.event.remaining) == (10, 9)
+    assert (standard.event.tickets_total, standard.event.remaining) == (50, 46)
+
+
+def test_period_and_ticket_type_together(db_session: Session, event: Event, sales: Sales) -> None:
+    detail = service.get_event_analytics(
+        db_session,
+        event,
+        from_date=date(*MAR, 11),
+        to_date=date(*MAR, 13),
+        ticket_type_id=sales.standard.id,
+    )
+
+    assert figures(detail) == (1, 3, 2, 6_000, 0, 0)
+    assert days(detail) == [(11, 1, 3, 6_000)]
+
+
+def test_overview_totals_follow_the_period_but_event_counts_do_not(
+    db_session: Session, organizer: OrganizerProfile, event: Event, sales: Sales
+) -> None:
+    everything = service.get_overview(db_session, organizer)
+    eleventh = service.get_overview(
+        db_session, organizer, from_date=date(*MAR, 11), to_date=date(*MAR, 11)
+    )
+
+    assert (everything.totals.orders, everything.totals.gross_kzt) == (2, 26_800)
+    assert (eleventh.totals.orders, eleventh.totals.gross_kzt, eleventh.totals.checked_in) == (
+        1,
+        6_000,
+        1,
+    )
+    assert eleventh.events == everything.events
+
+
+def test_filters_over_http(
+    api: TestClient, organizer: OrganizerProfile, event: Event, sales: Sales
+) -> None:
+    path = f"/organizer/analytics/events/{event.id}"
+    plain = api.get(path, headers=headers(organizer))
+    narrowed = api.get(
+        f"{path}?from_date=2030-03-11&to_date=2030-03-11&ticket_type_id={sales.standard.id}",
+        headers=headers(organizer),
+    )
+    overview = api.get(
+        "/organizer/analytics/overview?from_date=2030-03-12", headers=headers(organizer)
+    )
+
+    assert plain.status_code == narrowed.status_code == overview.status_code == 200
+    assert plain.json()["event"]["gross_kzt"] == 26_800
+    assert narrowed.json()["event"]["tickets_sold"] == 3
+    assert [t["name"] for t in narrowed.json()["ticket_types"]] == ["Standard"]
+    assert overview.json()["totals"]["refunds_kzt"] == 10_000
+
+
+def test_bad_dates_are_422(api: TestClient, organizer: OrganizerProfile, event: Event) -> None:
+    for path in (f"/organizer/analytics/events/{event.id}", "/organizer/analytics/overview"):
+        for query in ("from_date=2030-03-12&to_date=2030-03-10", "from_date=nope"):
+            response = api.get(f"{path}?{query}", headers=headers(organizer))
+            assert response.status_code == 422, (path, query)
+    response = api.get(
+        f"/organizer/analytics/events/{event.id}?ticket_type_id=nope", headers=headers(organizer)
+    )
+    assert response.status_code == 422
+
+
+def test_another_events_or_an_unknown_ticket_type_is_404(
+    api: TestClient, db_session: Session, organizer: OrganizerProfile, event: Event
+) -> None:
+    elsewhere = create_ticket_type(db_session, create_event(db_session, organizer))
+
+    for type_id in (elsewhere.id, uuid.uuid4()):
+        response = api.get(
+            f"/organizer/analytics/events/{event.id}?ticket_type_id={type_id}",
+            headers=headers(organizer),
+        )
+        assert response.status_code == 404

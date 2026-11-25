@@ -10,15 +10,15 @@ nothing.
 import csv
 import io
 import uuid
-from datetime import UTC, date, datetime, time, timedelta
+from datetime import UTC, date, datetime
 from typing import Literal
-from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
-from app.common.errors import BusinessRuleError, InvalidInputError, NotFoundError
+from app.common.errors import BusinessRuleError, NotFoundError
+from app.common.periods import day_bounds
 from app.modules.admin import repository
 from app.modules.admin.models import PlatformSettings
 from app.modules.admin.platform_settings import (
@@ -248,17 +248,7 @@ def update_settings(
 # --- CSV reports (BE-26) ---
 
 # Report dates are calendar days in Kazakhstan; timestamps in the file are UTC (ISO 8601).
-REPORT_TZ = ZoneInfo("Asia/Almaty")
 ReportKind = Literal["payments", "refunds", "orders"]
-
-
-def _bounds(from_date: date | None, to_date: date | None) -> tuple[datetime | None, ...]:
-    """from_date and to_date are both inclusive days in REPORT_TZ."""
-    if from_date is not None and to_date is not None and from_date > to_date:
-        raise InvalidInputError("from_date must not be after to_date")
-    start = datetime.combine(from_date, time(), REPORT_TZ) if from_date else None
-    end = datetime.combine(to_date + timedelta(days=1), time(), REPORT_TZ) if to_date else None
-    return start, end
 
 
 def _iso(value: datetime) -> str:
@@ -352,7 +342,7 @@ def build_report(
     """(file name, CSV bytes): UTF-8 with a BOM so Excel opens Cyrillic right, comma
     separated, one header row, then one row per record in the period, oldest first.
     No card data exists to leak; the only personal data is the buyer's email."""
-    start, end = _bounds(from_date, to_date)
+    start, end = day_bounds(from_date, to_date)
     header, rows = _report_rows(session, kind, start, end)
     out = io.StringIO()
     writer = csv.writer(out, lineterminator="\r\n")
@@ -366,7 +356,7 @@ def build_report(
 def promo_activity(
     session: Session, from_date: date | None, to_date: date | None, limit: int, offset: int
 ) -> PromoActivityPage:
-    start, end = _bounds(from_date, to_date)
+    start, end = day_bounds(from_date, to_date)
     rows, total, redemptions, discount = repository.promo_activity(
         session, start, end, limit, offset
     )

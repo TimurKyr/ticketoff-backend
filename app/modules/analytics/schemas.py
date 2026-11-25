@@ -14,7 +14,7 @@ class SalesFigures(BaseModel):
 
     orders: int = Field(description="Paid or free-confirmed orders.")
     tickets_sold: int = Field(description="Tickets in those orders (refunded orders excluded).")
-    checked_in: int
+    checked_in: int = Field(description="Tickets scanned at the door (in the period, if any).")
     check_in_percent: float = Field(description="checked_in / tickets_sold, 0 when none sold.")
     gross_kzt: int = Field(
         description="Succeeded ticket payments, i.e. already after promo discounts."
@@ -39,8 +39,12 @@ class EventStatsOut(SalesFigures):
     tickets_total: int = Field(
         description="Sum of quantity_total over all ticket types (capacity may be empty)."
     )
-    remaining: int = Field(description="tickets_total - tickets_sold, never below 0.")
-    percent_sold: float = Field(description="tickets_sold / tickets_total, 0 without tickets.")
+    remaining: int = Field(
+        description="tickets_total - tickets sold ever, never below 0 (ignores the period)."
+    )
+    percent_sold: float = Field(
+        description="Tickets sold ever / tickets_total, 0 without tickets (ignores the period)."
+    )
 
 
 class EventHistoryPage(BaseModel):
@@ -116,7 +120,8 @@ class EventAnalyticsOut(BaseModel):
     ticket_types: list[TicketTypeStatsOut]
     campaigns: list[CampaignStatsOut]
     daily_sales: list[DailySalesOut] = Field(
-        description="Confirmed orders per day of creation, in the venue's time zone."
+        description="Confirmed orders per day of creation, in the venue's time zone "
+        "(only days in the period, if any)."
     )
     timezone: str
     fee_percent: int
