@@ -211,8 +211,9 @@ def test_sold_out_is_409(db_session: Session, buyer: User, event: Event) -> None
     ticket_type = create_ticket_type(db_session, event, quantity_total=2, max_per_order=2)
     create_order_item(db_session, ticket_type, 2, OrderStatus.PAID)
 
-    with pytest.raises(BusinessRuleError, match="Not enough tickets left"):
+    with pytest.raises(BusinessRuleError, match="Not enough tickets left") as error:
         checkout(db_session, buyer, event, (ticket_type, 1))
+    assert error.value.code == "NOT_ENOUGH_TICKETS"
 
 
 # --- inventory hold ---

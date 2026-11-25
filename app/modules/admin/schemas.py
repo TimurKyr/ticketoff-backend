@@ -46,13 +46,15 @@ class SearchPage(BaseModel):
 
 
 class AdminPaymentOut(BaseModel):
-    """event_id: the activation's event, or the event of a ticket payment's order."""
+    """event_id: the activation's event, or the event of a ticket payment's order.
+    event_title: that event's title (BE-37), null when there is no event."""
 
     id: uuid.UUID
     purpose: PaymentPurpose
     status: PaymentStatus
     order_id: uuid.UUID | None
     event_id: uuid.UUID | None
+    event_title: str | None = None
     amount_kzt: int
     is_simulated: bool
     created_at: datetime
@@ -70,6 +72,7 @@ class AdminRefundOut(BaseModel):
     payment_id: uuid.UUID
     order_id: uuid.UUID | None
     event_id: uuid.UUID | None
+    event_title: str | None = None
     amount_kzt: int
     status: RefundStatus
     reason: str | None

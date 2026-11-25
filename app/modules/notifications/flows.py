@@ -125,8 +125,11 @@ def event_cancelled(
     event: Event,
     changed_orders: Sequence[Order],
     refunded_kzt: Mapping[uuid.UUID, int],
+    reason: str | None = None,
 ) -> None:
     """The event was cancelled: one email per buyer whose orders the cascade changed.
+
+    `reason`: the organizer's explanation (BE-37), shown in the email when given.
 
     `changed_orders`: the orders the cascade cancelled or refunded (not those that were
     already cancelled or refunded). `refunded_kzt`: order id -> amount refunded now.
@@ -137,7 +140,11 @@ def event_cancelled(
     # All buyers in one query: order.buyer would lazy-load one user per buyer.
     buyers = repository.users_by_id(session, by_buyer)
     # The .ics with STATUS:CANCELLED: importing it drops the entry the buyer added.
-    base = {**_event_context(event), "calendar_url": links.calendar_ics_url(event.id)}
+    base = {
+        **_event_context(event),
+        "calendar_url": links.calendar_ics_url(event.id),
+        "reason": reason,
+    }
     for buyer_id, orders in by_buyer.items():
         refund = sum(refunded_kzt.get(o.id, 0) for o in orders)
         notify(

@@ -56,7 +56,9 @@ def get_provider() -> EmailProvider:
         if settings.email_provider == "smtp":
             _provider = SmtpEmailProvider(settings)
         else:
-            _provider = ConsoleEmailProvider(log_body=settings.environment == "local")
+            local = settings.environment == "local"
+            # Locally the confirmation / reset link is logged too: no mailbox to open (BE-37).
+            _provider = ConsoleEmailProvider(log_body=local, log_secrets=local)
     return _provider
 
 

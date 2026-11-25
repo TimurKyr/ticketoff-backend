@@ -34,6 +34,7 @@ from app.modules.orders.schemas import CheckoutCreate, OrderOut, RegistrationCre
 from app.modules.payments import service
 from app.modules.payments.models import Payment, Refund
 from app.modules.payments.schemas import PayOrderIn, RefundIn
+from tests.emails import RecordingEmailProvider
 from tests.factories import (
     create_event,
     create_free_ticket_type,
@@ -313,6 +314,70 @@ def test_api_cancel_returns_the_event_and_scanner_refuses(
             headers=_headers(owner),
         )
         assert scan.json()["result"] == "event_cancelled"
+
+
+def test_api_reason_goes_to_buyers_and_audit(
+    api: TestClient,
+    db_session: Session,
+    emails: RecordingEmailProvider,
+    owner: User,
+    event: Event,
+    stocked: Stocked,
+) -> None:
+    """BE-37: the optional body's reason reaches the buyers' email and the audit row."""
+    emails.sent.clear()
+    reason = "  Артист заболел, концерт переносится  "
+
+    response = api.post(
+        f"/events/{event.id}/cancel", json={"reason": reason}, headers=_headers(owner)
+    )
+
+    assert response.status_code == 200
+    [row] = db_session.scalars(
+        select(AuditLog).where(
+            AuditLog.event_id == event.id, AuditLog.action_type == "event.cancelled"
+        )
+    ).all()
+    assert row.details["reason"] == reason.strip()
+    assert emails.sent
+    for email in emails.sent:
+        assert f"Причина: {reason.strip()}" in email.text
+        assert reason.strip() in (email.html or "")
+
+
+@pytest.mark.parametrize("body", [None, {}, {"reason": None}, {"reason": "   "}])
+def test_api_without_reason_is_as_before(
+    api: TestClient,
+    db_session: Session,
+    emails: RecordingEmailProvider,
+    owner: User,
+    event: Event,
+    stocked: Stocked,
+    body: dict | None,
+) -> None:
+    emails.sent.clear()
+
+    response = api.post(f"/events/{event.id}/cancel", json=body, headers=_headers(owner))
+
+    assert response.status_code == 200
+    [row] = db_session.scalars(
+        select(AuditLog).where(
+            AuditLog.event_id == event.id, AuditLog.action_type == "event.cancelled"
+        )
+    ).all()
+    assert "reason" not in row.details
+    assert emails.sent and all("Причина" not in m.text for m in emails.sent)
+
+
+def test_api_too_long_reason_is_422_and_nothing_changes(
+    api: TestClient, db_session: Session, owner: User, event: Event
+) -> None:
+    response = api.post(
+        f"/events/{event.id}/cancel", json={"reason": "x" * 501}, headers=_headers(owner)
+    )
+
+    assert response.status_code == 422
+    assert db_session.get(Event, event.id).status == EventStatus.PUBLISHED
 
 
 def test_api_twice_is_409(api: TestClient, owner: User, event: Event) -> None:

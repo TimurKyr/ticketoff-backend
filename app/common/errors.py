@@ -10,6 +10,11 @@ class DomainError(Exception):
 
     code: str | None = None
 
+    def __init__(self, *args: object, code: str | None = None) -> None:
+        super().__init__(*args)
+        if code is not None:
+            self.code = code
+
 
 class NotFoundError(DomainError):
     """The requested entity does not exist (or must not be revealed)."""
@@ -27,6 +32,16 @@ class EmailNotVerifiedError(PermissionDeniedError):
 
 class BusinessRuleError(DomainError):
     """The request breaks a business rule."""
+
+
+# Stable `code` values of business errors the web translates (BE-37). The English `detail`
+# may change; these may not.
+SALES_SUSPENDED = "SALES_SUSPENDED"
+NOT_ENOUGH_TICKETS = "NOT_ENOUGH_TICKETS"
+NOT_ENOUGH_CAPACITY = "NOT_ENOUGH_CAPACITY"
+TICKET_QUANTITY_EXCEEDS_CAPACITY = "TICKET_QUANTITY_EXCEEDS_CAPACITY"
+CAPACITY_BELOW_TICKET_QUANTITY = "CAPACITY_BELOW_TICKET_QUANTITY"
+CAPACITY_BELOW_SOLD = "CAPACITY_BELOW_SOLD"
 
 
 class PromoNotApplicableError(BusinessRuleError):

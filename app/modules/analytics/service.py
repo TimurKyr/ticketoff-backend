@@ -143,7 +143,8 @@ def list_history(
     limit: int,
     offset: int,
 ) -> EventHistoryPage:
-    """My events, newest first, each with its final numbers."""
+    """My events, each with its final numbers: newest first, but upcoming and active
+    soonest first (as GET /organizer/events)."""
     events, total = events_repository.list_for_organizer(
         session, organizer_id=organizer.id, bucket=bucket, now=_now(), limit=limit, offset=offset
     )

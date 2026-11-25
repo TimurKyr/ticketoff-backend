@@ -118,6 +118,9 @@ def list_for_organizer(
       completed -> status completed, or effective end is in the past
       active    -> running right now
       upcoming  -> starts in the future
+
+    Order (BE-37): upcoming and active soonest first (what the organizer works on next);
+    completed, cancelled and all events newest first.
     """
     effective_end = func.coalesce(Event.end_at, Event.start_at)
     not_closed = Event.status.notin_([EventStatus.CANCELLED, EventStatus.COMPLETED])
@@ -134,7 +137,9 @@ def list_for_organizer(
         stmt = stmt.where(not_closed, Event.start_at <= now, effective_end >= now)
     elif bucket == EventBucket.UPCOMING:
         stmt = stmt.where(not_closed, Event.start_at > now)
-    return _page(session, stmt.order_by(Event.start_at.desc(), Event.id.asc()), limit, offset)
+    soonest_first = bucket in (EventBucket.UPCOMING, EventBucket.ACTIVE)
+    start = Event.start_at.asc() if soonest_first else Event.start_at.desc()
+    return _page(session, stmt.order_by(start, Event.id.asc()), limit, offset)
 
 
 @dataclass(frozen=True)

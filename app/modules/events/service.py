@@ -4,7 +4,13 @@ from datetime import UTC, datetime
 
 from sqlalchemy.orm import Session
 
-from app.common.errors import BusinessRuleError, InvalidInputError, NotFoundError
+from app.common.errors import (
+    CAPACITY_BELOW_SOLD,
+    CAPACITY_BELOW_TICKET_QUANTITY,
+    BusinessRuleError,
+    InvalidInputError,
+    NotFoundError,
+)
 from app.modules.audit import repository as audit_repository
 from app.modules.audit import service as audit
 from app.modules.events import calendar, repository, slugs
@@ -68,11 +74,15 @@ def _check_capacity(session: Session, event: Event, capacity: int | None) -> Non
     types_total = orders_repository.total_quantity_for_event(session, event.id)
     if capacity < types_total:
         raise BusinessRuleError(
-            f"Capacity ({capacity}) is below the total ticket quantity ({types_total})"
+            f"Capacity ({capacity}) is below the total ticket quantity ({types_total})",
+            code=CAPACITY_BELOW_TICKET_QUANTITY,
         )
     held = orders_repository.held_quantity_for_event(session, event.id, _now())
     if capacity < held:
-        raise BusinessRuleError(f"Capacity ({capacity}) is below tickets already sold ({held})")
+        raise BusinessRuleError(
+            f"Capacity ({capacity}) is below tickets already sold ({held})",
+            code=CAPACITY_BELOW_SOLD,
+        )
 
 
 def _audit_status(session: Session, event: Event, user: User, action_type: str) -> None:

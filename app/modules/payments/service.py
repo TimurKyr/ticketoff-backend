@@ -14,7 +14,7 @@ from datetime import UTC, datetime
 
 from sqlalchemy.orm import Session
 
-from app.common.errors import BusinessRuleError, NotFoundError
+from app.common.errors import SALES_SUSPENDED, BusinessRuleError, NotFoundError
 from app.modules.admin.platform_settings import get_platform_settings
 from app.modules.audit import service as audit
 from app.modules.events import service as events_service
@@ -225,7 +225,7 @@ def pay_order(
     # Checked again at pay time, on the locked row: an admin may suspend sales (BE-22)
     # after checkout. The order stays pending and expires with its hold.
     if event.sales_suspended:
-        raise BusinessRuleError(orders_service.SALES_SUSPENDED_MESSAGE)
+        raise BusinessRuleError(orders_service.SALES_SUSPENDED_MESSAGE, code=SALES_SUSPENDED)
     if event.status != EventStatus.PUBLISHED or not event.paid_sales_active:
         raise BusinessRuleError("Paid ticket sales are not active for this event")
 
@@ -360,7 +360,9 @@ def refund_order(
 EVENT_CANCEL_REFUND_REASON = "Event cancelled"
 
 
-def cancel_event_with_orders(session: Session, event: Event, user: User) -> Event:
+def cancel_event_with_orders(
+    session: Session, event: Event, user: User, *, reason: str | None = None
+) -> Event:
     """Cancel the organizer's event and, in the same transaction, every order on it.
 
     free_confirmed -> cancelled (tickets too, checked-in ones included: the event is off);
@@ -368,7 +370,8 @@ def cancel_event_with_orders(session: Session, event: Event, user: User) -> Even
     -> cancelled; already cancelled or refunded -> untouched. One "event.cancelled" audit
     row with the counts, no per-order rows. One event_cancelled notification per buyer
     whose orders changed here, with what was refunded to them (BE-18); the emails go after
-    the commit. Ownership is checked by the route.
+    the commit. Ownership is checked by the route. `reason` (the organizer's words, optional,
+    BE-37) goes into those emails and into the audit row.
 
     Locks, in the repository lock order: the event (mark_cancelled), then all of its orders,
     then all of its tickets. Checkout, registration, pay, cancel and refund lock the event
@@ -402,7 +405,7 @@ def cancel_event_with_orders(session: Session, event: Event, user: User) -> Even
         changed.append(order)
         ticket_count += len(tickets)
 
-    notification_flows.event_cancelled(session, event, changed, refunded_by_order)
+    notification_flows.event_cancelled(session, event, changed, refunded_by_order, reason)
 
     audit.log(
         session,
@@ -417,6 +420,7 @@ def cancel_event_with_orders(session: Session, event: Event, user: User) -> Even
             "refunded_kzt": refunded_kzt,
             "pending_cancelled": pending_cancelled,
             "ticket_count": ticket_count,
+            **({"reason": reason} if reason else {}),
         },
     )
     session.commit()  # event, orders, tickets, refunds, audit row and notifications together

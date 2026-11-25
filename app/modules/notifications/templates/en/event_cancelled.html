@@ -3,6 +3,9 @@
     <p>We're sorry: the event has been cancelled.</p>
     <h2 style="margin:16px 0 4px;font-size:20px;">{{ event_title }}</h2>
     <p style="margin:0;">It was planned for: {{ starts_at | local_dt(tz_name) }}</p>
+{% if reason is defined and reason %}
+    <p style="margin:8px 0 0;">Reason: {{ reason }}</p>
+{% endif %}
 {% if refund_kzt %}
     <p><strong>We have refunded your payment in full: {{ refund_kzt | money }}.</strong></p>
 {% endif %}

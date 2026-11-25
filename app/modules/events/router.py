@@ -12,6 +12,7 @@ from app.modules.events.dependencies import require_event_owner
 from app.modules.events.models import Event
 from app.modules.events.schemas import (
     EventBucket,
+    EventCancel,
     EventCreate,
     EventOut,
     EventPage,
@@ -156,9 +157,21 @@ def unpublish_event(event: OwnedEventDep, user: CurrentUser, session: SessionDep
     response_model=EventOut,
     summary="Cancel an event: its orders are cancelled and paid ones refunded",
 )
-def cancel_event(event: OwnedEventDep, user: CurrentUser, session: SessionDep) -> Event:
-    """One transaction: free and pending orders cancelled, paid orders fully refunded."""
-    return _out(session, payments_service.cancel_event_with_orders(session, event, user))
+def cancel_event(
+    event: OwnedEventDep,
+    user: CurrentUser,
+    session: SessionDep,
+    payload: EventCancel | None = None,
+) -> Event:
+    """One transaction: free and pending orders cancelled, paid orders fully refunded.
+
+    The body is optional: {"reason": "..."} (up to 500 characters) is shown to buyers in the
+    cancellation email and kept in the audit row.
+    """
+    reason = payload.reason if payload is not None else None
+    return _out(
+        session, payments_service.cancel_event_with_orders(session, event, user, reason=reason)
+    )
 
 
 @organizer_router.get("", response_model=EventPage, summary="My events, optionally by bucket")

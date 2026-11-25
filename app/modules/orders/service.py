@@ -5,7 +5,15 @@ from typing import Literal
 
 from sqlalchemy.orm import Session, object_session
 
-from app.common.errors import BusinessRuleError, NotFoundError, PermissionDeniedError
+from app.common.errors import (
+    NOT_ENOUGH_CAPACITY,
+    NOT_ENOUGH_TICKETS,
+    SALES_SUSPENDED,
+    TICKET_QUANTITY_EXCEEDS_CAPACITY,
+    BusinessRuleError,
+    NotFoundError,
+    PermissionDeniedError,
+)
 from app.modules.audit import service as audit
 from app.modules.events import service as events_service
 from app.modules.events.enums import EventStatus, SeatingType
@@ -87,7 +95,8 @@ def _check_capacity(event: Event, current_total: int, new_total: int) -> None:
         return
     if new_total > event.capacity:
         raise BusinessRuleError(
-            f"Total ticket quantity ({new_total}) exceeds event capacity ({event.capacity})"
+            f"Total ticket quantity ({new_total}) exceeds event capacity ({event.capacity})",
+            code=TICKET_QUANTITY_EXCEEDS_CAPACITY,
         )
 
 
@@ -349,7 +358,7 @@ def _lock_and_validate(
     event = events_service.get_public_event(session, event_id)
     # On the locked row too: a suspend (BE-22) that committed while we waited wins.
     if event.sales_suspended:
-        raise BusinessRuleError(SALES_SUSPENDED_MESSAGE)
+        raise BusinessRuleError(SALES_SUSPENDED_MESSAGE, code=SALES_SUSPENDED)
     if event.seating_type == SeatingType.ASSIGNED:
         raise BusinessRuleError("This event uses seat selection")
     _ensure_registration_open(event, now)
@@ -374,11 +383,13 @@ def _lock_and_validate(
     available = get_availability(session, ticket_types, now)
     for item, ticket_type in zip(items, ticket_types, strict=True):
         if item.quantity > available[ticket_type.id]:
-            raise BusinessRuleError(f"Not enough tickets left for {ticket_type.name}")
+            raise BusinessRuleError(
+                f"Not enough tickets left for {ticket_type.name}", code=NOT_ENOUGH_TICKETS
+            )
     if event.capacity is not None:
         held = repository.held_quantity_for_event(session, event.id, now)
         if held + sum(item.quantity for item in items) > event.capacity:
-            raise BusinessRuleError("Not enough capacity left")
+            raise BusinessRuleError("Not enough capacity left", code=NOT_ENOUGH_CAPACITY)
 
     return event, ticket_types
 

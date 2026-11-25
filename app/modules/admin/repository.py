@@ -74,10 +74,12 @@ def list_payments(
     limit: int,
     offset: int,
 ) -> tuple[list[Row], int]:
-    """(Payment, event_id) rows, newest first."""
+    """(Payment, event_id, event title) rows, newest first."""
+    event_id = _payment_event_id()
     stmt = (
-        select(Payment, _payment_event_id())
+        select(Payment, event_id, Event.title)
         .outerjoin(Order, Order.id == Payment.order_id)
+        .outerjoin(Event, Event.id == event_id)
         .order_by(Payment.created_at.desc(), Payment.id)
     )
     if purpose is not None:
@@ -90,11 +92,13 @@ def list_payments(
 def list_refunds(
     session: Session, *, status: RefundStatus | None, limit: int, offset: int
 ) -> tuple[list[Row], int]:
-    """(Refund, order_id, event_id) rows, newest first."""
+    """(Refund, order_id, event_id, event title) rows, newest first."""
+    event_id = _payment_event_id()
     stmt = (
-        select(Refund, Payment.order_id, _payment_event_id())
+        select(Refund, Payment.order_id, event_id, Event.title)
         .join(Payment, Payment.id == Refund.payment_id)
         .outerjoin(Order, Order.id == Payment.order_id)
+        .outerjoin(Event, Event.id == event_id)
         .order_by(Refund.created_at.desc(), Refund.id)
     )
     if status is not None:

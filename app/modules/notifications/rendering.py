@@ -11,7 +11,7 @@ Context each template needs (values are plain: str, int, bool, aware datetime, l
   payment_failed        event_title, starts_at, tz_name, amount_kzt, retry_until, order_url
   refund_processed      event_title, starts_at, tz_name, amount_kzt, reason (or None), order_url
   event_cancelled       event_title, starts_at, tz_name, refund_kzt (0: nothing refunded),
-                        order_urls (one per order the cancellation changed)
+                        order_urls (one per order the cancellation changed), reason (or None)
   event_updated         event_title, tz_name, changes [{field: starts_at|ends_at|venue, old,
                         new}] (datetimes, or venue lines for venue)
   account_verification  verify_url, expires_hours
@@ -67,6 +67,52 @@ def _language_dir(name: str, language: str) -> str:
     if (TEMPLATES_DIR / language / f"{name}.txt").is_file():
         return language
     return DEFAULT_LANGUAGE
+
+
+# Support case categories as the customer reads them in email subjects (BE-37): the case has
+# no title of its own. kk is used once kk templates exist (BE-28); until then the email is ru.
+_SUPPORT_CATEGORY_LABELS = {
+    "ru": {
+        "payment": "Оплата",
+        "refund": "Возврат",
+        "ticket": "Билеты",
+        "event": "Событие",
+        "account": "Аккаунт",
+        "other": "Другое",
+        "seating": "Места",
+        "check_in": "Вход на событие",
+        "technical": "Технический вопрос",
+    },
+    "en": {
+        "payment": "Payment",
+        "refund": "Refund",
+        "ticket": "Tickets",
+        "event": "Event",
+        "account": "Account",
+        "other": "Other",
+        "seating": "Seating",
+        "check_in": "Event entry",
+        "technical": "Technical issue",
+    },
+    "kk": {
+        "payment": "Төлем",
+        "refund": "Қайтару",
+        "ticket": "Билеттер",
+        "event": "Іс-шара",
+        "account": "Аккаунт",
+        "other": "Басқа",
+        "seating": "Орындар",
+        "check_in": "Іс-шараға кіру",
+        "technical": "Техникалық сұрақ",
+    },
+}
+
+
+def support_category_label(category: str, language: str) -> str:
+    """The category's name in the language the support email will be written in."""
+    labels = _SUPPORT_CATEGORY_LABELS.get(_language_dir("support_reply", language))
+    labels = labels or _SUPPORT_CATEGORY_LABELS[DEFAULT_LANGUAGE]
+    return labels.get(str(category), str(category).replace("_", " ").capitalize())
 
 
 def render(name: str, language: str, context: dict) -> tuple[str, str, str | None]:

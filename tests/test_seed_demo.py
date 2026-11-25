@@ -16,6 +16,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from app.modules.audit.models import AuditLog
+from app.modules.events import slugs
 from app.modules.events.enums import EventStatus
 from app.modules.events.models import Event, Venue
 from app.modules.identity.models import OrganizerProfile, PayoutAccount, StaffAssignment, User
@@ -97,7 +98,8 @@ def test_seed_twice_creates_nothing_new(db_session: Session, fresh: str) -> None
     assert all(v.timezone == "Asia/Almaty" for v in first.venues)
     for event in first.events.values():
         assert event.status == EventStatus.PUBLISHED
-        assert event.title.startswith("Demo: ")
+        assert not event.title.startswith("Demo")  # BE-37: no prefix on the showcase
+        assert event.slug.startswith(slugs.slugify(event.title))
     assert first.events["paid"].paid_sales_active
     assert first.events["multi"].paid_sales_active
     assert not first.events["free"].paid_sales_active
@@ -168,6 +170,36 @@ def test_old_titles_are_renamed_not_duplicated(db_session: Session, fresh: str) 
         assert event.title == spec.title
         assert second.events[spec.key].id == event.id
     assert sum(line.startswith("renamed ") for line in second.created) == len(renamed)
+
+
+def test_demo_prefix_is_dropped_with_its_slug(db_session: Session, fresh: str) -> None:
+    """BE-37, as on production: events titled "Demo: ..." (BE-24) with slugs made from that
+    title (BE-35 migration) get the clean title and a clean slug, once."""
+    first = seed_demo.run(db_session, password=PASSWORD)
+    tag = uuid.uuid4().hex[:6]
+    for spec in seed_demo.EVENTS:
+        db_session.execute(
+            update(Event)
+            .where(Event.id == first.events[spec.key].id)
+            .values(title=f"Demo: {spec.title}", slug=f"demo-{spec.key}-{tag}")
+        )
+    db_session.flush()
+    before = _counts(db_session)
+
+    second = seed_demo.run(db_session, password=PASSWORD)
+
+    assert _counts(db_session) == before
+    for spec in seed_demo.EVENTS:
+        event = db_session.get(Event, first.events[spec.key].id)
+        assert event.title == spec.title
+        assert event.slug.startswith(slugs.slugify(spec.title)), event.slug
+    assert sum(line.startswith("slug ") for line in second.created) == len(seed_demo.EVENTS)
+    paid = first.events["paid"]
+    assert db_session.get(Event, paid.id).slug.startswith("kazakh-symphony-night")
+
+    third = seed_demo.run(db_session, password=PASSWORD)
+
+    assert third.created == [] and _counts(db_session) == before
 
 
 def test_interrupted_run_is_finished_next_time(

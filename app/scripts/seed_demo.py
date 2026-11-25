@@ -11,7 +11,8 @@ Idempotent: every row is looked up by a natural key (user email, venue name, eve
 of the demo organizer, ticket type name within its event, promo code, attendee name within
 the demo buyer's orders of an event) and created only if missing. Running it again changes
 nothing, except with --reset-scans or a DEMO_PASSWORD that differs from the stored one.
-Demo events found under an earlier title (without the "Demo: " prefix) are renamed.
+Demo events found under an earlier title (BE-37: the "Demo: " prefix of earlier seeds) are
+renamed, and a slug made from the prefixed title ("demo-...") is made again from the new one.
 
 Dates (BE-24): an event gets its date when it is created (today + its offset in Almaty, or
 the nearest Saturday / Sunday) and keeps it on later runs. --relative-dates moves every open
@@ -54,6 +55,7 @@ import app.modules.registry  # noqa: F401  (all models, for relationship resolut
 from app.modules.checkin import service as checkin_service
 from app.modules.checkin.schemas import ScanResult
 from app.modules.events import service as events_service
+from app.modules.events import slugs
 from app.modules.events.enums import EventStatus
 from app.modules.events.models import Event, Venue
 from app.modules.events.schemas import EventCreate, EventUpdate
@@ -183,8 +185,8 @@ def _paid(name: str, price_kzt: int, quantity: int, description: str | None = No
 EVENTS = (
     EventSpec(
         key="free",
-        title="Demo: Открытая лекция: IT-карьера в Казахстане",
-        old_titles=("Открытая лекция: IT-карьера в Казахстане",),
+        title="Открытая лекция: IT-карьера в Казахстане",
+        old_titles=("Demo: Открытая лекция: IT-карьера в Казахстане",),
         description="Бесплатная лекция и нетворкинг. Демо-событие ticketoff.",
         category="education",
         venue="Дворец Республики",
@@ -195,8 +197,8 @@ EVENTS = (
     ),
     EventSpec(
         key="paid",
-        title="Demo: Kazakh Symphony Night",
-        old_titles=("Kazakh Symphony Night",),
+        title="Kazakh Symphony Night",
+        old_titles=("Demo: Kazakh Symphony Night",),
         description="Вечер симфонической музыки. Демо-событие ticketoff, оплата симулируется.",
         category="music",
         venue="Astana Arena",
@@ -207,8 +209,8 @@ EVENTS = (
     ),
     EventSpec(
         key="multi",
-        title="Demo: Almaty Jazz Weekend",
-        old_titles=("Almaty Jazz Weekend",),
+        title="Almaty Jazz Weekend",
+        old_titles=("Demo: Almaty Jazz Weekend",),
         description="Джазовый фестиваль: несколько типов билетов. Демо-событие ticketoff.",
         category="music",
         venue="Almaty Arena",
@@ -224,7 +226,8 @@ EVENTS = (
     # --- BE-24: a fuller showcase (both cities, every category, dates around "today") ---
     EventSpec(
         key="standup",
-        title="Demo: Вечер стендапа: новые имена",
+        title="Вечер стендапа: новые имена",
+        old_titles=("Demo: Вечер стендапа: новые имена",),
         description="Молодые комики пробуют новый материал. 18+. Демо-событие ticketoff.",
         category="other",
         venue="Камерный зал «Сазген»",
@@ -235,7 +238,8 @@ EVENTS = (
     ),
     EventSpec(
         key="boardgames",
-        title="Demo: Вечер настольных игр",
+        title="Вечер настольных игр",
+        old_titles=("Demo: Вечер настольных игр",),
         description="Приходите с друзьями или одни: столы, правила и ведущие на месте.",
         category="other",
         venue="Лекторий «Білім»",
@@ -246,7 +250,8 @@ EVENTS = (
     ),
     EventSpec(
         key="theatre-tram",
-        title="Demo: Спектакль «Последний трамвай»",
+        title="Спектакль «Последний трамвай»",
+        old_titles=("Demo: Спектакль «Последний трамвай»",),
         description="Камерная драма о двух незнакомцах в ночном городе. Демо-событие ticketoff.",
         category="theatre",
         venue="Центр творчества «Шаңырақ»",
@@ -257,7 +262,8 @@ EVENTS = (
     ),
     EventSpec(
         key="morning-run",
-        title="Demo: Утренняя пробежка в парке",
+        title="Утренняя пробежка в парке",
+        old_titles=("Demo: Утренняя пробежка в парке",),
         description="Лёгкие 5 км в своём темпе, разминка с тренером. Вход свободный.",
         category="sport",
         venue="Парк «Жастар»",
@@ -268,7 +274,8 @@ EVENTS = (
     ),
     EventSpec(
         key="futsal-cup",
-        title="Demo: Городской кубок по мини-футболу",
+        title="Городской кубок по мини-футболу",
+        old_titles=("Demo: Городской кубок по мини-футболу",),
         description="Финальный день любительского турнира: полуфиналы и финал.",
         category="sport",
         venue="Almaty Arena",
@@ -279,7 +286,8 @@ EVENTS = (
     ),
     EventSpec(
         key="kids-puss",
-        title="Demo: Детский спектакль «Кот в сапогах»",
+        title="Детский спектакль «Кот в сапогах»",
+        old_titles=("Demo: Детский спектакль «Кот в сапогах»",),
         description="Музыкальная сказка для детей от 4 лет. Демо-событие ticketoff.",
         category="kids",
         venue="Центр творчества «Шаңырақ»",
@@ -290,7 +298,8 @@ EVENTS = (
     ),
     EventSpec(
         key="art-opening",
-        title="Demo: Открытие выставки молодых художников",
+        title="Открытие выставки молодых художников",
+        old_titles=("Demo: Открытие выставки молодых художников",),
         description="Живопись и графика выпускников художественных школ. Вход свободный.",
         category="other",
         venue="Центр творчества «Шаңырақ»",
@@ -301,7 +310,8 @@ EVENTS = (
     ),
     EventSpec(
         key="kids-robotics",
-        title="Demo: Мастерская для детей: собираем робота",
+        title="Мастерская для детей: собираем робота",
+        old_titles=("Demo: Мастерская для детей: собираем робота",),
         description="Детям 8–12 лет: собираем и программируем простого робота. Наборы выдаём.",
         category="kids",
         venue="Лекторий «Білім»",
@@ -312,7 +322,8 @@ EVENTS = (
     ),
     EventSpec(
         key="python-meetup",
-        title="Demo: Митап разработчиков Python",
+        title="Митап разработчиков Python",
+        old_titles=("Demo: Митап разработчиков Python",),
         description="Три доклада о бэкенде и данных, потом нетворкинг. Вход свободный.",
         category="education",
         venue="Центр творчества «Шаңырақ»",
@@ -323,7 +334,8 @@ EVENTS = (
     ),
     EventSpec(
         key="dombra",
-        title="Demo: Домбыра кеші: дала әуендері",
+        title="Домбыра кеші: дала әуендері",
+        old_titles=("Demo: Домбыра кеші: дала әуендері",),
         description="Домбыра мен қобызға арналған кеш. Билеттер аз қалды. Демо-событие ticketoff.",
         category="music",
         venue="Камерный зал «Сазген»",
@@ -334,7 +346,8 @@ EVENTS = (
     ),
     EventSpec(
         key="photo-class",
-        title="Demo: Мастер-класс по уличной фотографии",
+        title="Мастер-класс по уличной фотографии",
+        old_titles=("Demo: Мастер-класс по уличной фотографии",),
         description="Теория утром, съёмка в городе днём, разбор снимков вечером. Мест мало.",
         category="education",
         venue="Лекторий «Білім»",
@@ -345,7 +358,8 @@ EVENTS = (
     ),
     EventSpec(
         key="rock-fest",
-        title="Demo: Рок-фестиваль «Степной ветер»",
+        title="Рок-фестиваль «Степной ветер»",
+        old_titles=("Demo: Рок-фестиваль «Степной ветер»",),
         description="Шесть молодых групп на одной сцене. Демо-событие ticketoff.",
         category="music",
         venue="Almaty Arena",
@@ -360,7 +374,8 @@ EVENTS = (
     ),
     EventSpec(
         key="ballet",
-        title="Demo: Балет «Лебединое озеро»",
+        title="Балет «Лебединое озеро»",
+        old_titles=("Demo: Балет «Лебединое озеро»",),
         description="Классический балет в двух действиях. Демо-событие ticketoff.",
         category="theatre",
         venue="Барыс Арена",
@@ -371,7 +386,8 @@ EVENTS = (
     ),
     EventSpec(
         key="half-marathon",
-        title="Demo: Ночной полумарафон",
+        title="Ночной полумарафон",
+        old_titles=("Demo: Ночной полумарафон",),
         description="21 км по вечернему городу, есть дистанция 5 км. Слот участника с номером.",
         category="sport",
         venue="Парк «Жастар»",
@@ -382,7 +398,8 @@ EVENTS = (
     ),
     EventSpec(
         key="past-hackathon",
-        title="Demo: Осенний хакатон",
+        title="Осенний хакатон",
+        old_titles=("Demo: Осенний хакатон",),
         description="24 часа на прототип в командах до 4 человек. Прошедшее демо-событие.",
         category="education",
         venue="Лекторий «Білім»",
@@ -393,7 +410,8 @@ EVENTS = (
     ),
     EventSpec(
         key="past-chamber",
-        title="Demo: Камерный концерт «Осенние мелодии»",
+        title="Камерный концерт «Осенние мелодии»",
+        old_titles=("Demo: Камерный концерт «Осенние мелодии»",),
         description="Струнный квартет и фортепиано. Прошедшее демо-событие.",
         category="music",
         venue="Astana Arena",
@@ -602,6 +620,25 @@ def _find_event(session: Session, organizer: OrganizerProfile, title: str) -> Ev
     )
 
 
+# The slug of a title with the "Demo: " prefix of earlier seeds.
+_OLD_SLUG_PREFIX = "demo-"
+
+
+def _fix_demo_slug(session: Session, result: SeedResult, event: Event, spec: EventSpec) -> None:
+    """A slug never follows the title (BE-35), so one made from "Demo: ..." stays "demo-...".
+
+    Made again from the title, so /events/kazakh-symphony-night works after the rename. Only
+    for such slugs: a run after that finds a clean slug and changes nothing.
+    """
+    if event.slug is None or not event.slug.startswith(_OLD_SLUG_PREFIX):
+        return
+    if slugs.slugify(spec.title).startswith(_OLD_SLUG_PREFIX):
+        return
+    old_slug = event.slug
+    event.slug = slugs.unique_slug(session, spec.title)
+    result.created.append(f"slug {old_slug} -> {event.slug}")
+
+
 def _ensure_event(
     session: Session,
     result: SeedResult,
@@ -621,6 +658,8 @@ def _ensure_event(
                 session, event, EventUpdate(title=spec.title), organizer_user
             )
             result.created.append(f"renamed {old_title!r} -> {spec.title!r}")
+    if event is not None and event.status not in _CLOSED:
+        _fix_demo_slug(session, result, event, spec)
     if event is None:
         start = _start_at(spec, staging=spec.past)
         payload = EventCreate(

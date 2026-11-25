@@ -132,13 +132,19 @@ def list_event_orders(
 
 # --- registrations, orders, tickets ---
 
+ORDER_RULE_DOC = (
+    'A business rule failed: {"detail": "...", "code": "..."}. Stable codes (BE-37): '
+    "SALES_SUSPENDED (an admin stopped sales), NOT_ENOUGH_TICKETS (a ticket type has fewer "
+    "left than asked), NOT_ENOUGH_CAPACITY (the event capacity is full). Other 409s have no code."
+)
+
 
 @registrations_router.post(
     "/{event_id}/registrations",
     response_model=OrderOut,
     status_code=status.HTTP_201_CREATED,
     summary="Register for free tickets",
-    responses={403: {"description": EMAIL_NOT_VERIFIED_DOC}},
+    responses={403: {"description": EMAIL_NOT_VERIFIED_DOC}, 409: {"description": ORDER_RULE_DOC}},
 )
 def register_free(
     event_id: uuid.UUID, payload: RegistrationCreate, user: VerifiedUser, session: SessionDep
@@ -151,7 +157,7 @@ def register_free(
     response_model=OrderOut,
     status_code=status.HTTP_201_CREATED,
     summary="Start a checkout for paid tickets (simulated payment follows)",
-    responses={403: {"description": EMAIL_NOT_VERIFIED_DOC}},
+    responses={403: {"description": EMAIL_NOT_VERIFIED_DOC}, 409: {"description": ORDER_RULE_DOC}},
 )
 def checkout(
     event_id: uuid.UUID, payload: CheckoutCreate, user: VerifiedUser, session: SessionDep

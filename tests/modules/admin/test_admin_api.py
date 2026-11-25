@@ -192,6 +192,7 @@ def test_suspend_event_blocks_registration_checkout_and_pay(
     ):
         assert blocked.status_code == 409
         assert "suspended" in blocked.json()["detail"]
+        assert blocked.json()["code"] == "SALES_SUSPENDED"  # the web translates it (BE-37)
 
     # The organizer sees it on their event.
     assert api.get(f"/events/{event.id}").json()["sales_suspended"] is True
@@ -384,6 +385,8 @@ def test_payments_filter_by_status(
     assert str(failed.id) in {p["id"] for p in body["items"]}
     assert {p["status"] for p in body["items"]} == {"failed"}
     assert body["total"] >= 1
+    [listed] = [p for p in body["items"] if p["id"] == str(failed.id)]
+    assert listed["event_title"] == event.title  # BE-37: next to event_id
 
 
 def test_activations_are_activation_payments_only(
@@ -391,8 +394,9 @@ def test_activations_are_activation_payments_only(
 ) -> None:
     activation = _payment(db_session, event, PaymentPurpose.ACTIVATION, PaymentStatus.SUCCEEDED)
     body = api.get("/admin/activations?limit=100", headers=admin).json()
-    assert str(activation.id) in {p["id"] for p in body["items"]}
     assert {p["purpose"] for p in body["items"]} == {"activation"}
+    [listed] = [p for p in body["items"] if p["id"] == str(activation.id)]
+    assert listed["event_id"] == str(event.id) and listed["event_title"] == event.title
 
 
 def test_refunds_list_has_order_and_event(
@@ -420,10 +424,12 @@ def test_refunds_list_has_order_and_event(
         if p["id"] == str(payment.id)
     ]
     assert listed["event_id"] == str(event.id)
+    assert listed["event_title"] == event.title
     [item] = [r for r in body["items"] if r["id"] == str(refund.id)]
     assert item["payment_id"] == str(payment.id)
     assert item["order_id"] == str(order.id)
     assert item["event_id"] == str(event.id)
+    assert item["event_title"] == event.title
     assert item["reason"] == "dup"
 
 

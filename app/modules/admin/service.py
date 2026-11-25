@@ -155,11 +155,12 @@ def list_payments(
                 status=payment.status,
                 order_id=payment.order_id,
                 event_id=event_id,
+                event_title=event_title,
                 amount_kzt=payment.amount_kzt,
                 is_simulated=payment.is_simulated,
                 created_at=payment.created_at,
             )
-            for payment, event_id in rows
+            for payment, event_id, event_title in rows
         ],
         total=total,
         limit=limit,
@@ -177,12 +178,13 @@ def list_refunds(
             payment_id=refund.payment_id,
             order_id=order_id,
             event_id=event_id,
+            event_title=event_title,
             amount_kzt=refund.amount_kzt,
             status=refund.status,
             reason=refund.reason,
             created_at=refund.created_at,
         )
-        for refund, order_id, event_id in rows
+        for refund, order_id, event_id, event_title in rows
     ]
     return RefundPage(items=items, total=total, limit=limit, offset=offset)
 
