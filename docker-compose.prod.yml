@@ -41,6 +41,8 @@ services:
       # Support message attachments (BE-33): files live in the `attachments` volume, the
       # database keeps only their names. Back the volume up with the database (docs/DEPLOY.md).
       ATTACHMENTS_DIR: /data/attachments
+      # Event cover images (R-12): a folder of the same volume, so the same backup covers it.
+      EVENT_IMAGES_DIR: /data/attachments/events
     volumes:
       - attachments:/data/attachments
     expose:

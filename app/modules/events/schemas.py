@@ -211,6 +211,13 @@ class EventOut(BaseModel):
         ),
     )
     calendar_links: CalendarLinks
+    image_url: str | None = Field(
+        default=None,
+        description=(
+            "Absolute URL of the cover image (R-12), null when there is none. Changes when "
+            "the image is replaced. GET it: no login for a public event's image"
+        ),
+    )
     # Read from Event.organizer_public (set by annotate_on_sale), sent as "organizer".
     organizer: EventOrganizerOut | None = Field(
         default=None,

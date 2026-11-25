@@ -20,8 +20,9 @@ COPY app ./app
 
 # /data/attachments is the mount point of the attachments volume (BE-33). It is created here,
 # owned by appuser, because a new named volume copies the owner of the folder it covers.
+# events/ holds the event cover images (R-12); on an existing volume the API creates it.
 RUN useradd --create-home --uid 1000 appuser \
-    && mkdir -p /data/attachments \
+    && mkdir -p /data/attachments/events \
     && chown -R appuser /app /data
 USER appuser
 

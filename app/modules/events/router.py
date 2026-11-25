@@ -1,13 +1,13 @@
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Path, Query, Response, status
+from fastapi import APIRouter, Depends, File, Path, Query, Response, UploadFile, status
 from pydantic import AwareDatetime
 from sqlalchemy.orm import Session
 
 from app.common.pagination import Limit, Offset
 from app.core.db import get_session
-from app.modules.events import calendar, service
+from app.modules.events import calendar, images, service
 from app.modules.events.dependencies import require_event_owner
 from app.modules.events.models import Event
 from app.modules.events.schemas import (
@@ -22,6 +22,7 @@ from app.modules.events.schemas import (
 from app.modules.identity.dependencies import (
     EMAIL_NOT_VERIFIED_DOC,
     CurrentUser,
+    OptionalUser,
     VerifiedUser,
     require_organizer,
 )
@@ -125,6 +126,74 @@ def update_event(
     payload: EventUpdate, event: OwnedEventDep, user: CurrentUser, session: SessionDep
 ) -> Event:
     return _out(session, service.update_event(session, event, payload, user))
+
+
+@events_router.put(
+    "/{event_id}/image",
+    response_model=EventOut,
+    summary="Upload or replace the event's cover image (PNG, JPEG, WebP; up to 5 MB)",
+    responses={
+        404: {"description": "No such event, or not yours"},
+        413: {"description": "The image is larger than 5 MB"},
+        422: {"description": "Not a PNG, JPEG or WebP image (checked by content), or empty"},
+    },
+)
+def put_event_image(
+    event: OwnedEventDep,
+    user: CurrentUser,
+    session: SessionDep,
+    image: Annotated[UploadFile, File(description="The image file")],
+) -> Event:
+    """multipart/form-data with one file field `image`. The type is read from the file's
+    first bytes; its name and declared type are ignored. The old image is deleted.
+    A cancelled or completed event: 409. Returns the event with the new image_url."""
+    # One byte over the limit is enough to refuse the file.
+    data = image.file.read(images.MAX_BYTES + 1)
+    return _out(session, service.set_image(session, event, data, user))
+
+
+@events_router.delete(
+    "/{event_id}/image",
+    response_model=EventOut,
+    summary="Remove the event's cover image",
+    responses={404: {"description": "No such event, or not yours"}},
+)
+def delete_event_image(event: OwnedEventDep, user: CurrentUser, session: SessionDep) -> Event:
+    """Deletes the file too. No image: nothing changes (200). Cancelled or completed: 409."""
+    return _out(session, service.remove_image(session, event, user))
+
+
+@events_router.get(
+    "/{event_id}/image/{image_id}",
+    response_class=Response,
+    responses={
+        200: {
+            "content": {
+                t: {"schema": {"type": "string", "format": "binary"}} for t in images.ALLOWED_TYPES
+            },
+            "description": "The image",
+        },
+        404: {"description": "No such image, an old image id, or an event you cannot see"},
+    },
+    summary="The event's cover image (the image_url of EventOut)",
+)
+def get_event_image(
+    event_id: uuid.UUID, image_id: uuid.UUID, user: OptionalUser, session: SessionDep
+) -> Response:
+    """No login for an event whose page is public (published, public or unlisted). A draft,
+    private, cancelled or completed event's image: only its organizer or a platform admin,
+    with the Bearer token (an <img> tag cannot send it: fetch it and use a blob URL).
+
+    The URL changes when the image changes, so it is cached for a year."""
+    data, content_type, public = service.get_image(session, event_id, image_id, user)
+    return Response(
+        content=data,
+        media_type=content_type,
+        headers={
+            "Cache-Control": ("public" if public else "private") + ", max-age=31536000, immutable",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
 
 
 @events_router.post(

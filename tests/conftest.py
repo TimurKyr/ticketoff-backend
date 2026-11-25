@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 import app.modules.registry  # noqa: F401
 from app.core.db import engine, get_session
 from app.main import app
+from app.modules.events import images as event_images
 from app.modules.notifications import service as notifications
 from app.modules.support.storage import LocalDiskStorage, set_storage
 from tests.emails import RecordingEmailProvider
@@ -74,3 +75,12 @@ def attachment_storage(tmp_path: Path) -> Iterator[LocalDiskStorage]:
     set_storage(storage)
     yield storage
     set_storage(None)
+
+
+@pytest.fixture(autouse=True)
+def event_image_storage(tmp_path: Path) -> Iterator[LocalDiskStorage]:
+    """Event cover images (R-12) go to a temporary folder in every test."""
+    storage = LocalDiskStorage(tmp_path / "event-images")
+    event_images.set_storage(storage)
+    yield storage
+    event_images.set_storage(None)

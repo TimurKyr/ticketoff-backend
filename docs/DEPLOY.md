@@ -7,6 +7,8 @@ published to the host.
 
 The API also keeps the files sent with support messages (BE-33) in the volume `attachments`
 (`/data/attachments` inside the `api` container, one file per attachment, named by its uuid).
+Event cover images (R-12) are in the same volume, in its folder `events/`
+(`/data/attachments/events`, `EVENT_IMAGES_DIR`), so the same backup covers them.
 
 Files: `docker-compose.prod.yml`, `deploy/Caddyfile`, `.env.prod.example`, `scripts/backup-db.sh`.
 
@@ -100,9 +102,10 @@ docker compose -f docker-compose.prod.yml exec -T db \
   sh -c 'pg_restore -U "$POSTGRES_USER" -d "$POSTGRES_DB" --clean --if-exists' < backups/<file>.dump
 ```
 
-### Support attachments (the `attachments` volume)
+### Support attachments and event images (the `attachments` volume)
 
-The database dump holds only the names, types and sizes of the files sent with support messages;
+The database dump holds only the names, types and sizes of the files sent with support messages
+and the ids of the event cover images (R-12, folder `events/` of the volume);
 **the files themselves are in the volume `attachments`, so a dump alone does not save them**. Back
 the folder up together with the dump (same cron, same day):
 
@@ -124,6 +127,8 @@ download, and a file without a row is just unused space. Removing the volume
 (`docker compose down -v`) deletes the files for good. The limits (3 files, 5 MB each, PNG, JPEG
 or PDF) are in `app/modules/support/attachments.py`; the storage is behind an interface
 (`app/modules/support/storage.py`), so it can be replaced by an S3-compatible store later.
+Event images: one per event, PNG, JPEG or WebP up to 5 MB (`app/modules/events/images.py`); a
+replaced or removed image's file is deleted at once.
 
 ## Demo data
 

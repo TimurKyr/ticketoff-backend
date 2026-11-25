@@ -14,6 +14,8 @@ from app.modules.identity.security import decode_access_token
 SessionDep = Annotated[Session, Depends(get_session)]
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
+# Same scheme, but a missing token is not an error (routes that also serve guests).
+optional_oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login", auto_error=False)
 
 ACCOUNT_SUSPENDED = "Account is suspended"
 EMAIL_NOT_VERIFIED = "Confirm your email address first: open the link we emailed you"
@@ -47,6 +49,24 @@ def get_current_user(
 
 
 CurrentUser = Annotated[User, Depends(get_current_user)]
+
+
+def get_optional_user(
+    token: Annotated[str | None, Depends(optional_oauth2_scheme)],
+    session: SessionDep,
+) -> User | None:
+    """The logged-in user, or None for a guest. A bad or expired token, or a suspended
+    account, also counts as a guest: the route then shows only what anyone may see."""
+    if not token:
+        return None
+    user_id = decode_access_token(token)
+    user = session.get(User, user_id) if user_id is not None else None
+    if user is None or user.is_suspended:
+        return None
+    return user
+
+
+OptionalUser = Annotated[User | None, Depends(get_optional_user)]
 
 
 def require_verified_email(user: CurrentUser) -> User:
