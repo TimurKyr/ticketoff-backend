@@ -1,0 +1,4 @@
+{% set labels = {"open": "ашық", "in_progress": "жұмыста", "waiting_customer": "сіздің жауабыңызды күтуде", "resolved": "шешілді"} %}
+«{{ case_subject }}» өтінішіңіздің күйі өзгерді: {{ labels[status] }}.
+
+Өтінішті ашу: {{ case_url }}

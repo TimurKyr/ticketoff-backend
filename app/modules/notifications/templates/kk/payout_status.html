@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block body %}
+{% if stage == "sales_activated" %}
+    <p>«{{ event_title }}» іс-шарасы үшін ақылы сатылым қосылды.</p>
+    <p style="color:#6b7280;font-size:13px;">Бұл — симуляция: ticketoff-тағы төлемдер нақты ақшаны есептен шығармайды.</p>
+    <p><a href="{{ link_url }}" style="display:inline-block;padding:10px 16px;background:#111;color:#fff;border-radius:6px;text-decoration:none;">Іс-шараны ашу</a></p>
+{% else %}
+    <p>Ұйымдастырушыны тексеру және төлем шоты дайын.</p>
+    <p style="color:#6b7280;font-size:13px;">Бұл — симуляция: нақты ақша аударылмайды.</p>
+    <p>Енді іс-шараларыңыз үшін ақылы сатылымды қосуға болады.</p>
+    <p><a href="{{ link_url }}" style="display:inline-block;padding:10px 16px;background:#111;color:#fff;border-radius:6px;text-decoration:none;">Ұйымдастырушы кабинеті</a></p>
+{% endif %}
+{% endblock %}

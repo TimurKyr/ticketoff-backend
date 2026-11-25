@@ -17,6 +17,9 @@ ORDER_PATH = "/orders/{order_id}"
 TICKETS_PATH = "/tickets"
 # Support emails: the case thread (ticketoff-web FE-8).
 SUPPORT_CASE_PATH = "/support/cases/{case_id}"
+# Organizer pages (BE-28 payout notices): the dashboard, and one event's management page.
+ORGANIZER_PATH = "/organizer"
+ORGANIZER_EVENT_PATH = "/organizer/events/{event_id}"
 # Email verification: the web app reads ?token= and calls POST /auth/verify-email.
 VERIFY_EMAIL_PATH = "/verify-email"
 # Password reset: the web app reads ?token=, asks for a new password and calls
@@ -43,6 +46,14 @@ def order_url(order_id: uuid.UUID) -> str:
 
 def tickets_url() -> str:
     return web_url(TICKETS_PATH)
+
+
+def organizer_url() -> str:
+    return web_url(ORGANIZER_PATH)
+
+
+def organizer_event_url(event_id: uuid.UUID) -> str:
+    return web_url(ORGANIZER_EVENT_PATH.format(event_id=event_id))
 
 
 def support_url(case_id: uuid.UUID) -> str:

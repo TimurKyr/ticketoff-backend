@@ -34,7 +34,8 @@ def test_html_is_escaped_text_is_not() -> None:
 
 
 def test_unknown_language_falls_back_to_russian() -> None:
-    email = build_email("a@example.com", "support_reply", "kk", reply())
+    # "kk" was the example until BE-28 added Kazakh templates; "de" has none.
+    email = build_email("a@example.com", "support_reply", "de", reply())
 
     assert email.subject == "Ответ поддержки: Джаз"
     assert '<html lang="ru">' in email.html

@@ -71,6 +71,10 @@ def _maybe_activate(session: Session, event: Event) -> ActivationChecklistOut:
     if done and not event.paid_sales_active:
         event.paid_sales_active = True
         checklist.active = True
+        # Only on the switch itself (BE-28): a later step, or the same step again, finds
+        # paid sales already on and sends nothing.
+        organizer = repository.lock_organizer(session, event.organizer_id)
+        notification_flows.payout_status(session, organizer, "sales_activated", event)
     return checklist
 
 
@@ -112,6 +116,11 @@ def simulate_verification(session: Session, event: Event) -> ActivationChecklist
     see it."""
     event = _lock_open_event(session, event.id)
     organizer = repository.lock_organizer(session, event.organizer_id)
+    # Read under the organizer lock: two calls at once cannot both see "not ready".
+    was_ready = (
+        organizer.verification_status == VerificationStatus.VERIFIED
+        and repository.get_verified_payout_account(session, organizer.id) is not None
+    )
     organizer.verification_status = VerificationStatus.VERIFIED
     if repository.get_verified_payout_account(session, organizer.id) is None:
         repository.add_payout_account(
@@ -122,6 +131,8 @@ def simulate_verification(session: Session, event: Event) -> ActivationChecklist
                 provider_ref=f"SIMULATED-{uuid.uuid4().hex[:12].upper()}",
             ),
         )
+    if not was_ready:  # BE-28: only when it becomes ready, so calling it again sends nothing
+        notification_flows.payout_status(session, organizer, "account_verified")
     return _finish_step(session, event)
 
 

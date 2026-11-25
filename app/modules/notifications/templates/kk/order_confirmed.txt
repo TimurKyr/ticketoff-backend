@@ -1,0 +1,26 @@
+{% if is_paid %}Тапсырысыңыз төленді.{% else %}Тіркелуіңіз расталды.{% endif +%}
+
+Іс-шара: {{ event_title }}
+Уақыты: {{ starts_at | local_dt(tz_name) }}
+Өтетін орны: {{ venue_line }}
+
+Билеттер:
+{% for t in tickets %}
+- {{ t.ticket_type }}: {{ t.guest_name }}
+{% endfor %}
+{% if is_paid %}
+
+Сомасы: {{ total_kzt | money }}
+{% if discount_kzt %}
+Жеңілдік: {{ discount_kzt | money }}
+{% endif %}
+Төленді: {{ paid_kzt | money }}
+{% endif %}
+
+{% if tickets_url %}
+Билеттер көп болғандықтан, хатқа тіркелмеді. Барлық билеттер: {{ tickets_url }}
+{% else %}
+Билеттер хатқа тіркелген (QR-коды бар PDF). Кіре берісте QR-кодты көрсетіңіз.
+{% endif %}
+Тапсырыс: {{ order_url }}
+Күнтізбеге қосу (.ics): {{ calendar_url }}

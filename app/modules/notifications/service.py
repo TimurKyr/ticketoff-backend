@@ -212,6 +212,25 @@ def notify_support(
     notify(session, user, type_, context, payload={"case_id": str(case_id)})
 
 
+def notify_support_assignment(
+    session: Session, user: User, *, case_id: uuid.UUID, case_subject: str
+) -> None:
+    """Tell the case's customer that a support specialist took the case (BE-28).
+
+    Never names the specialist (no email, no name: the text says "a support specialist").
+    The support service calls it only when a case goes from nobody to someone through
+    "take the case", so one action still sends one notification.
+    """
+    context = {"case_subject": case_subject, "case_url": links.support_url(case_id)}
+    notify(
+        session,
+        user,
+        NotificationType.SUPPORT_ASSIGNMENT,
+        context,
+        payload={"case_id": str(case_id)},
+    )
+
+
 # --- in-app list (stage 4) ---------------------------------------------------------------------
 
 

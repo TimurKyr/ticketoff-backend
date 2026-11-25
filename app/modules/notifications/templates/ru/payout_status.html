@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block body %}
+{% if stage == "sales_activated" %}
+    <p>Платные продажи для события «{{ event_title }}» включены.</p>
+    <p style="color:#6b7280;font-size:13px;">Это симуляция: оплата на ticketoff не списывает реальные деньги.</p>
+    <p><a href="{{ link_url }}" style="display:inline-block;padding:10px 16px;background:#111;color:#fff;border-radius:6px;text-decoration:none;">Открыть событие</a></p>
+{% else %}
+    <p>Проверка организатора и счёт для выплат готовы.</p>
+    <p style="color:#6b7280;font-size:13px;">Это симуляция: реальные деньги не переводятся.</p>
+    <p>Теперь для ваших событий можно включить платные продажи.</p>
+    <p><a href="{{ link_url }}" style="display:inline-block;padding:10px 16px;background:#111;color:#fff;border-radius:6px;text-decoration:none;">Кабинет организатора</a></p>
+{% endif %}
+{% endblock %}

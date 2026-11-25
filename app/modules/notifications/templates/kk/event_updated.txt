@@ -1,0 +1,8 @@
+{% set labels = {"starts_at": "Басталуы", "ends_at": "Аяқталуы", "venue": "Өтетін орны"} %}
+Ұйымдастырушы «{{ event_title }}» іс-шарасын өзгертті.
+
+{% for c in changes %}
+{{ labels[c.field] }}: {% if c.field == 'venue' %}{{ c.old }}{% elif c.old %}{{ c.old | local_dt(tz_name) }}{% else %}көрсетілмеген{% endif %} → {% if c.field == 'venue' %}{{ c.new }}{% elif c.new %}{{ c.new | local_dt(tz_name) }}{% else %}көрсетілмеген{% endif +%}
+{% endfor %}
+
+Билеттеріңіз жарамды болып қалады.

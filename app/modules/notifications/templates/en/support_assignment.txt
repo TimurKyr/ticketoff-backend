@@ -1,0 +1,3 @@
+A support specialist has taken your request "{{ case_subject }}" and is working on it. The reply will come in this request.
+
+Open the request: {{ case_url }}

@@ -553,11 +553,12 @@ def test_support_emails_and_notifications_point_to_the_case(
     case = attendee_case(api, buyer, event)
     case_url = f"https://ticketoff.store/support/cases/{case['id']}"
 
-    api.post(f"/support/cases/{case['id']}/assign", headers=organizer.headers)  # status email
+    # BE-28: taking the case sends support_assignment (it used to be a support_status email).
+    api.post(f"/support/cases/{case['id']}/assign", headers=organizer.headers)
     say(api, organizer, case["id"], "Parking is free")  # reply email
 
-    [status_mail, reply_mail] = emails.to(buyer.user.email)[-2:]
-    for mail in (status_mail, reply_mail):
+    [assignment_mail, reply_mail] = emails.to(buyer.user.email)[-2:]
+    for mail in (assignment_mail, reply_mail):
         assert case_url in mail.text
         assert f'href="{case_url}"' in mail.html
     # The in-app rows carry the case id; the web app builds the same /support/cases/<id> link.
@@ -565,7 +566,7 @@ def test_support_emails_and_notifications_point_to_the_case(
         select(Notification).where(Notification.user_id == buyer.user.id)
     ).all()
     support_rows = [r for r in rows if r.type.value.startswith("support_")]
-    assert sorted(r.type.value for r in support_rows) == ["support_reply", "support_status"]
+    assert sorted(r.type.value for r in support_rows) == ["support_assignment", "support_reply"]
     assert all(r.payload == {"case_id": case["id"]} for r in support_rows)
 
 
@@ -610,12 +611,14 @@ def test_taking_a_case_notifies_the_customer(
 ) -> None:
     case = attendee_case(api, buyer, event)
 
+    # BE-28: one notification for the one action, "your case was taken" (it also covers the
+    # open -> in_progress flip, which used to send support_status here).
     api.post(f"/support/cases/{case['id']}/assign", headers=organizer.headers)
-    assert support_notifications(db_session, buyer) == ["support_status"]
+    assert support_notifications(db_session, buyer) == ["support_assignment"]
 
     # Taking it again changes nothing.
     api.post(f"/support/cases/{case['id']}/assign", headers=organizer.headers)
-    assert support_notifications(db_session, buyer) == ["support_status"]
+    assert support_notifications(db_session, buyer) == ["support_assignment"]
 
 
 def test_an_admin_reply_notifies_the_organizer_who_opened_the_case(
