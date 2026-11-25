@@ -2,12 +2,12 @@
 no token → 401, any other user → 403."""
 
 import uuid
-from datetime import date
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query, Response
 
 from app.common.pagination import Limit, Offset
+from app.common.periods import ReportDate
 from app.modules.admin import service
 from app.modules.admin.schemas import (
     AdminUserOut,
@@ -141,11 +141,6 @@ def update_settings(
     """Applies from the next request on: new activations pay the new fee (paid ones keep
     theirs), new checkouts hold for the new time. Audited as admin.settings_updated."""
     return service.update_settings(session, admin, data)
-
-
-ReportDate = Annotated[
-    date | None, Query(description="Day in Kazakhstan time (Asia/Almaty), inclusive")
-]
 
 
 @admin_router.get(

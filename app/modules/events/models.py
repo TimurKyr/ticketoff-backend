@@ -2,6 +2,7 @@ import uuid
 
 from sqlalchemy import (
     Boolean,
+    CheckConstraint,
     Column,
     DateTime,
     ForeignKey,
@@ -77,6 +78,16 @@ class Seat(Base):
 
 class Event(Base):
     __tablename__ = "events"
+    __table_args__ = (
+        # The cover image (R-12): both set or both NULL, and only the types we accept.
+        CheckConstraint(
+            "(image_id IS NULL) = (image_content_type IS NULL)", name="image_fields_together"
+        ),
+        CheckConstraint(
+            "image_content_type IN ('image/png', 'image/jpeg', 'image/webp')",
+            name="image_content_type_allowed",
+        ),
+    )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     organizer_id = Column(
@@ -120,6 +131,10 @@ class Event(Base):
     end_at = Column(DateTime(timezone=True))
     registration_opens_at = Column(DateTime(timezone=True))
     registration_closes_at = Column(DateTime(timezone=True))
+    # Cover image (R-12): the file is in the image storage under this id (events.images).
+    # A new upload gets a new id, so the public URL changes with the image.
+    image_id = Column(UUID(as_uuid=True))
+    image_content_type = Column(String(20))
     # Any change to the row (BE-31): the calendar file's SEQUENCE and LAST-MODIFIED.
     updated_at = Column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
@@ -129,6 +144,7 @@ class Event(Base):
     price_from = None
     availability = None
     calendar_links = None
+    image_url = None
     # EventOut.organizer (public contact). Not named `organizer`: that is the relationship,
     # which would lazy-load the profile once per event.
     organizer_public = None

@@ -35,6 +35,9 @@ class Settings(BaseSettings):
     # Where support message attachments are stored (BE-33). In production this is the
     # docker volume mounted at /data/attachments; back it up together with the database.
     attachments_dir: str = "data/attachments"
+    # Event cover images (R-12). In production a folder inside the attachments volume, so
+    # the same backup covers them.
+    event_images_dir: str = "data/attachments/events"
     # Email (BE-18). "console" only logs the emails (local, tests); "smtp" sends them.
     email_provider: Literal["console", "smtp"] = "console"
     email_from: str = "ticketoff <no-reply@ticketoff.store>"

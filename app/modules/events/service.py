@@ -1,3 +1,4 @@
+import logging
 import uuid
 from collections.abc import Iterable
 from datetime import UTC, datetime
@@ -13,7 +14,7 @@ from app.common.errors import (
 )
 from app.modules.audit import repository as audit_repository
 from app.modules.audit import service as audit
-from app.modules.events import calendar, repository, slugs
+from app.modules.events import calendar, images, repository, slugs
 from app.modules.events.enums import EventStatus, EventVisibility
 from app.modules.events.models import Event, Venue
 from app.modules.events.schemas import (
@@ -23,10 +24,14 @@ from app.modules.events.schemas import (
     availability_of,
     check_dates,
 )
+from app.modules.identity.enums import SystemRole
 from app.modules.identity.models import OrganizerProfile, User
 from app.modules.notifications import flows as notification_flows
 from app.modules.orders import repository as orders_repository
 from app.modules.orders.models import TicketType
+from app.modules.support.storage import delete_quietly
+
+logger = logging.getLogger("app.events")
 
 _CLOSED = (EventStatus.CANCELLED, EventStatus.COMPLETED)
 
@@ -196,6 +201,7 @@ def duplicate_event(session: Session, event: Event) -> Event:
     )
     _sync_slug(session, copy)  # its own slug: the original keeps its link
     repository.add_event(session, copy)
+    new_files = _copy_image(event, copy)
     for ticket_type in orders_repository.list_by_event(session, event.id, include_hidden=True):
         session.add(
             TicketType(
@@ -212,8 +218,115 @@ def duplicate_event(session: Session, event: Event) -> Event:
                 is_hidden=ticket_type.is_hidden,
             )
         )
-    session.commit()
+    try:
+        session.commit()
+    except Exception:
+        delete_quietly(images.get_storage(), new_files)
+        raise
     return copy
+
+
+def _copy_image(source: Event, copy: Event) -> list[str]:
+    """The copy gets its own file of the cover image (R-12), so replacing or removing one
+    event's image never touches the other's. A missing file is skipped: the copy just has
+    no image. Returns the keys written, to remove them if the commit fails."""
+    if source.image_id is None:
+        return []
+    storage = images.get_storage()
+    try:
+        data = storage.read(str(source.image_id))
+    except FileNotFoundError:
+        logger.warning("image file of event %s is missing; not copied", source.id)
+        return []
+    new_id = uuid.uuid4()
+    storage.save(str(new_id), data)
+    copy.image_id = new_id
+    copy.image_content_type = source.image_content_type
+    return [str(new_id)]
+
+
+def set_image(session: Session, event: Event, data: bytes, user: User) -> Event:
+    """Store a new cover image (R-12), replacing the old one. The file is written first and
+    removed again if the commit fails; the old file is removed only after the commit."""
+    content_type = images.check_image(data)
+    _lock(session, event)  # two uploads at once: the second sees the first's image as old
+    _require_open(event)
+    storage = images.get_storage()
+    old_id = event.image_id
+    new_id = uuid.uuid4()
+    storage.save(str(new_id), data)
+    try:
+        event.image_id = new_id
+        event.image_content_type = content_type
+        audit.log(
+            session,
+            actor_user_id=user.id,
+            action_type="event.image_updated",
+            entity_type="event",
+            entity_id=event.id,
+            event_id=event.id,
+            details={"image_id": str(new_id), "content_type": content_type, "size": len(data)},
+        )
+        session.commit()
+    except Exception:
+        session.rollback()
+        delete_quietly(storage, [str(new_id)])
+        raise
+    if old_id is not None:
+        delete_quietly(storage, [str(old_id)])
+    return event
+
+
+def remove_image(session: Session, event: Event, user: User) -> Event:
+    """Remove the cover image (R-12); nothing happens when there is none."""
+    _lock(session, event)
+    _require_open(event)
+    old_id = event.image_id
+    if old_id is None:
+        return event
+    event.image_id = None
+    event.image_content_type = None
+    audit.log(
+        session,
+        actor_user_id=user.id,
+        action_type="event.image_removed",
+        entity_type="event",
+        entity_id=event.id,
+        event_id=event.id,
+        details={"image_id": str(old_id)},
+    )
+    session.commit()
+    delete_quietly(images.get_storage(), [str(old_id)])
+    return event
+
+
+def get_image(
+    session: Session, event_id: uuid.UUID, image_id: uuid.UUID, user: User | None
+) -> tuple[bytes, str, bool]:
+    """GET /events/{id}/image/{image_id}: the bytes, the content type and whether the image
+    is public. Seen by whoever sees the event page (published, not private); any other
+    event's image only by its organizer or a platform admin. Everyone else, an old image
+    id or a missing file: 404."""
+    event = repository.get_event(session, event_id)
+    if event is None or event.image_id != image_id:
+        raise NotFoundError("Image not found")
+    public = event.status == EventStatus.PUBLISHED and event.visibility != EventVisibility.PRIVATE
+    if not public and not _can_manage(event, user):
+        raise NotFoundError("Image not found")
+    try:
+        data = images.get_storage().read(str(image_id))
+    except FileNotFoundError:
+        logger.error("image file of event %s is missing", event.id)
+        raise NotFoundError("Image not found") from None
+    return data, event.image_content_type, public
+
+
+def _can_manage(event: Event, user: User | None) -> bool:
+    if user is None:
+        return False
+    if user.system_role == SystemRole.PLATFORM_ADMIN:
+        return True
+    return event.organizer.user_id == user.id
 
 
 def publish_event(session: Session, event: Event, user: User) -> Event:
@@ -360,5 +473,6 @@ def annotate_on_sale(
         event.price_from = row.min_price_kzt if row else None
         event.availability = availability_of(row.available, row.quantity_total) if row else None
         event.calendar_links = calendar.links_for(event)
+        event.image_url = images.image_url(event.id, event.image_id)
         event.organizer_public = organizers.get(event.organizer_id)
     del venues
