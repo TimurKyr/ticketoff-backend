@@ -1,7 +1,7 @@
 # ticketoff — Data Model (ERD)
 
-Единый источник правды по данным платформы: 24 сущности из раздела 6 ТЗ, их ключевые
-поля, статусы и связи. Утверждаем перед тем, как писать модели и первую миграцию.
+Единый источник правды по данным платформы: 25 сущностей из раздела 6 ТЗ и 3 дополнительные
+таблицы (см. «Дополнительные таблицы»), их ключевые поля, статусы и связи. В базе 28 таблиц.
 
 - **БД:** PostgreSQL · **ORM:** SQLAlchemy 2.0 (sync, psycopg 3) · **Миграции:** Alembic
 - **Валюта:** KZT · **MVP:** платежи/выплаты симулируются, реальных денег нет
@@ -54,6 +54,10 @@ erDiagram
     SUPPORT_CASE ||--|{ SUPPORT_MESSAGE : contains
     PROMOTIONAL_CAMPAIGN ||--|{ PROMO_CODE : generates
     PROMO_CODE ||--o{ PROMO_REDEMPTION : "redeemed as"
+    PROMOTIONAL_CAMPAIGN ||--o{ CAMPAIGN_TICKET_TYPE : "applies to"
+    TICKET_TYPE ||--o{ CAMPAIGN_TICKET_TYPE : "discounted by"
+    SUPPORT_MESSAGE ||--o{ SUPPORT_ATTACHMENT : has
+    USER ||--o{ PLATFORM_SETTINGS : "last updated by"
 
     USER {
       uuid id PK
@@ -236,6 +240,24 @@ erDiagram
       string action_type
       string entity_type
     }
+    CAMPAIGN_TICKET_TYPE {
+      uuid campaign_id PK, FK
+      uuid ticket_type_id PK, FK
+    }
+    SUPPORT_ATTACHMENT {
+      uuid id PK
+      uuid message_id FK
+      string filename
+      string content_type
+      int size
+    }
+    PLATFORM_SETTINGS {
+      smallint id PK
+      int activation_fee_kzt
+      int processing_fee_percent
+      int checkout_hold_minutes
+      uuid updated_by_user_id FK
+    }
 ```
 
 ## Сущности по доменам
@@ -283,6 +305,14 @@ erDiagram
 
 ### Audit
 - **AuditLog** — неизменяемая запись значимого действия (кто, что, над чем, когда).
+
+## Дополнительные таблицы (сверх 25 сущностей §6 ТЗ)
+
+Модель ТЗ не менялась: все 25 сущностей — отдельные таблицы. Три таблицы добавлены под конкретные требования:
+
+- **CampaignTicketType** (`campaign_ticket_types`, BE-29, R-72) — к каким типам билетов применяется кампания. Связь многие-ко-многим: составной PK `campaign_id` + `ticket_type_id`, оба FK с `ON DELETE CASCADE`. Нет строк — кампания действует на все типы события.
+- **SupportAttachment** (`support_attachments`, BE-33, бонус §8) — вложения к сообщениям поддержки, описание выше.
+- **PlatformSettings** (`platform_settings`, BE-26, R-127) — комиссии и время брони, которые платформенный админ меняет без передеплоя. Одна строка (`CHECK id = 1`), границы — CHECK-ограничения; нет строки — действуют значения из окружения. Изменения пишутся в аудит.
 
 ## Ключевые решения
 
